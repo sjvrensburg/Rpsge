@@ -224,7 +224,6 @@ Grammar <- R6::R6Class(
     #' Create a new Grammar instance
     #'
     #' @param grammar_path Character path to grammar file (optional)
-    #'
     #' @return A new `Grammar` object
     initialize = function(grammar_path = NULL) {
       private$.max_init_depth <- 6
@@ -346,7 +345,16 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
 
-    # Add new method to load saved grammar
+    #' @description
+    #' Load previously saved grammar state from file
+    #'
+    #' @param file_path Character path to the saved grammar file (.rds)
+    #' @return Invisible self (for method chaining)
+    #' @examples
+    #' \dontrun{
+    #' grammar <- Grammar$new()
+    #' grammar$load_grammar("saved_grammar.rds")
+    #' }
     load_grammar = function(file_path) {
       grammar_data <- readRDS(file = file_path)
       private$.grammar <- grammar_data$grammar
@@ -638,7 +646,9 @@ Grammar <- R6::R6Class(
     #' @param mapping_rules List of production rules to apply
     #' @param positions_to_map Vector tracking mapping positions
     #' @param needs_python_filter Logical indicating if Python filtering needed
-    #' @return List containing phenotype and maximum depth reached
+    #' @return List containing:
+    #'   - Character string of mapped expression
+    #'   - Numeric maximum depth reached
     mapping = function(mapping_rules, positions_to_map = NULL, needs_python_filter = FALSE) {
       # Initialize position tracking if not provided
       if (is.null(positions_to_map)) {

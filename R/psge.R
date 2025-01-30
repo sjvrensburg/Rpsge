@@ -247,7 +247,6 @@ PSGE <- R6::R6Class(
     #' Run the evolutionary process
     #'
     #' @param verbose Logical; if TRUE, print progress information
-    #'
     #' @return Best individual found (list with components genotype, fitness, etc.)
     evolve = function(verbose = TRUE) {
       # Initialize progress tracking
