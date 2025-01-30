@@ -13,10 +13,21 @@ An R package implementing **Probabilistic Structured Grammatical Evolution (PSGE
 - 📜 **BNF Grammar Support**: Read standard Backus-Naur Form (BNF) grammars
 - 🚀 **C++ Accelerated Core**: Critical probability updates optimized with RcppArmadillo
 
+## Important Requirements & Caveats
+
+- Requires a C++ compiler (Rtools on Windows)
+- Memory usage scales with population size and grammar complexity
+- Grammar files must use UTF-8 encoding
+- Solutions evolve stochastically - multiple runs recommended for best results
+- Large grammars may require significant computation time
+
 ## Installation
 
 ```r
-# Install from GitHub
+# Install dependencies first
+install.packages(c("Rcpp", "RcppArmadillo", "R6"))
+
+# Then install Rpsge
 if (!require("devtools")) install.packages("devtools")
 devtools::install_github("sjvrensburg/Rpsge")
 ```
@@ -40,10 +51,14 @@ grammar <- create_grammar("example.bnf")
 
 # Evaluation function (minimize MSE from f(x) = x + 1)
 eval_func <- function(phenotype) {
-  x <- seq(-1, 1, by = 0.1)
-  y_true <- x + 1
-  y_pred <- eval(parse(text = phenotype))
-  mean((y_true - y_pred)^2)
+  tryCatch({
+    x <- seq(-1, 1, by = 0.1)
+    y_true <- x + 1
+    y_pred <- eval(parse(text = phenotype))
+    mean((y_true - y_pred)^2)
+  }, error = function(e) {
+    return(Inf)  # Return worst fitness on error
+  })
 }
 
 # Create PSGE optimizer
@@ -114,12 +129,24 @@ Full documentation available via:
 
 ## Dependencies
 
-- R (≥ 4.3.3)
+- R (≥ 4.2.2)
 - Rcpp
 - RcppArmadillo
 - R6
 
-Acknowledgments
+## Contributing
+
+Contributions are welcome! Please submit issues and pull requests through GitHub:
+1. Fork repository
+2. Create feature branch (`git checkout -b feature/your-feature`)
+3. Commit changes (`git commit -am 'Add awesome feature'`)
+4. Push to branch (`git push origin feature/your-feature`)
+5. Open Pull Request
+
+## License
+GNU GPLv3 © Stéfan Janse van Rensburg
+
+## Acknowledgments
 This package is based on the Probabilistic Structured Grammatical Evolution (PSGE) algorithm introduced in the following work:
 
 ```bibtex
@@ -136,15 +163,3 @@ The implementation in this package is heavily based on Jessica Mégane's origina
 For production use, we highly recommend that you rather use their Python package.
 
 We thank the authors for their work and for making their code publicly available.
-
-## Contributing
-
-Contributions are welcome! Please submit issues and pull requests through GitHub:
-1. Fork repository
-2. Create feature branch (`git checkout -b feature/your-feature`)
-3. Commit changes (`git commit -am 'Add awesome feature'`)
-4. Push to branch (`git push origin feature/your-feature`)
-5. Open Pull Request
-
-## License
-GNU GPLv3 © Stéfan Janse van Rensburg
