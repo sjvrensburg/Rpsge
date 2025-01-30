@@ -8,6 +8,8 @@ Description: An implementation of Probabilistic Structured Grammatical Evolution
     (PSGE) in R. PSGE combines Structured Grammatical Evolution with probabilistic
     grammar-guided genetic programming to evolve solutions to various problems.
 License: GPL (>= 3)
+Additional_repositories: https://sjvrensburg.github.io/Rpsge
+Citation: See citation("Rpsge")
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2

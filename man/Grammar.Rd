@@ -24,6 +24,15 @@ grammar$generate_uniform_pcfg()
 grammar$update_pcfg_probabilities(individual, learning_factor = 0.01)
 }
 
+
+## ------------------------------------------------
+## Method `Grammar$load_grammar`
+## ------------------------------------------------
+
+\dontrun{
+grammar <- Grammar$new()
+grammar$load_grammar("saved_grammar.rds")
+}
 }
 \section{Active bindings}{
 \if{html}{\out{<div class="r6-active-bindings">}}
@@ -163,8 +172,30 @@ Invisible self (for method chaining)
 \if{html}{\out{<a id="method-Grammar-load_grammar"></a>}}
 \if{latex}{\out{\hypertarget{method-Grammar-load_grammar}{}}}
 \subsection{Method \code{load_grammar()}}{
+Load previously saved grammar state from file
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{Grammar$load_grammar(file_path)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{file_path}}{Character path to the saved grammar file (.rds)}
+}
+\if{html}{\out{</div>}}
+}
+\subsection{Returns}{
+Invisible self (for method chaining)
+}
+\subsection{Examples}{
+\if{html}{\out{<div class="r example copy">}}
+\preformatted{\dontrun{
+grammar <- Grammar$new()
+grammar$load_grammar("saved_grammar.rds")
+}
+}
+\if{html}{\out{</div>}}
+
 }
 
 }
@@ -369,7 +400,11 @@ Map genotype to phenotype
 \if{html}{\out{</div>}}
 }
 \subsection{Returns}{
-List containing phenotype and maximum depth reached
+List containing:
+\itemize{
+\item Character string of mapped expression
+\item Numeric maximum depth reached
+}
 }
 }
 \if{html}{\out{<hr>}}
