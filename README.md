@@ -4,6 +4,9 @@
 
 An R package implementing **Probabilistic Structured Grammatical Evolution (PSGE)**, combining grammatical evolution with probabilistic context-free grammars (PCFG) to evolve solutions for optimization problems.
 
+
+> :warning: This package still requires extensive testing. Consider it **pre-alpha software**. Use at own risk!
+
 ## Features
 
 - 🧬 **Probabilistic Grammar-Guided Evolution**: Uses PCFGs to bias search toward promising regions
