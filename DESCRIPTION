@@ -21,6 +21,9 @@ Imports:
     methods,
     roxygen2,
     R6,
+    digest,
+    styler,
+    prettycode,
     stringr
 Suggests: 
     testthat (>= 3.0.0)

@@ -16,6 +16,6 @@
 #' @name Rpsge-package
 #' @aliases Rpsge
 #' @useDynLib Rpsge, .registration = TRUE
-#' @importFrom Rcpp loadModule evalCpp
+#' @importFrom Rcpp sourceCpp
 #' @importFrom methods new
 "_PACKAGE"
