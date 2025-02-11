@@ -1,0 +1,27 @@
+Package: Rpsge
+Title: Probabilistic Structured Grammatical Evolution in R
+Version: 0.0.0.9000
+Authors@R: 
+    person("Stéfan", "Janse van Rensburg", , "stefanj@mandala.ac.za", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-0749-2277"))
+Description: An implementation of Probabilistic Structured Grammatical Evolution 
+    (PSGE) in R. PSGE combines Structured Grammatical Evolution with probabilistic
+    grammar-guided genetic programming to evolve solutions to various problems.
+License: GPL (>= 3)
+Additional_repositories: https://sjvrensburg.github.io/Rpsge
+Citation: See citation("Rpsge")
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+LinkingTo: 
+    Rcpp,
+    RcppArmadillo
+Imports: 
+    Rcpp,
+    methods,
+    roxygen2,
+    R6,
+    stringr
+Suggests: 
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
