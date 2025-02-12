@@ -30,30 +30,35 @@ Evolution <- R6::R6Class(
       }
     },
 
-    generate_random_individual = function() {
+    generate_random_individual = function(grammar) {
       # Initialize empty lists for each non-terminal
-      genotype <- lapply(self$grammar$non_terminals$values(), function(x) list())
-      names(genotype) <- self$grammar$non_terminals$values()
+      genotype <- lapply(grammar$non_terminals$values(), function(x) list())
+      names(genotype) <- grammar$non_terminals$values()
 
-      # Generate initial depth for recursion
-      tree_depth <- self$grammar$recursive_individual_creation(
+      cat("Initial empty genotype structure:\n")
+      print(str(genotype))
+
+      # Generate the actual content
+      result <- grammar$recursive_individual_creation(
         genotype,
-        self$grammar$start_rule[[1]],  # Extract symbol from start rule
-        0  # Initial depth
+        grammar$start_rule[[1]],
+        0
       )
+
+      cat("\nGenerated genotype:\n")
+      print(str(result$genotype))
+
+      # Now let's map it to a phenotype
+      positions_to_map <- rep(0, length(result$genotype))
+      mapping_result <- grammar$mapping(result$genotype, positions_to_map)
+
+      cat("\nResulting phenotype:\n")
+      print(mapping_result$phenotype)
 
       list(
-        genotype = genotype,
+        genotype = result$genotype,
         fitness = NA,
-        tree_depth = tree_depth
-      )
-    },
-
-    make_initial_population = function() {
-      replicate(
-        self$params$popsize,
-        self$generate_random_individual(),
-        simplify = FALSE
+        tree_depth = result$depth
       )
     },
 
@@ -146,8 +151,8 @@ Evolution <- R6::R6Class(
     crossover = function(p1, p2) {
       attempts <- 0
       repeat {
-        offspring <- crossover_impl(p1, p2)  # Current crossover logic
-        if (validate_phenotype(offspring$genotype) || attempts > 10) break
+        offspring <- self$crossover_impl(p1, p2)  # Current crossover logic
+        if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
         attempts <- attempts + 1
       }
       offspring
@@ -191,11 +196,11 @@ Evolution <- R6::R6Class(
       ind
     },
 
-    mutate = function(p1, p2) {
+    mutate = function(p) {
       attempts <- 0
       repeat {
-        offspring <- mutate_impl(p1, p2)  # Current mutate logic
-        if (validate_phenotype(offspring$genotype) || attempts > 10) break
+        offspring <- self$mutate_impl(p)  # Current mutate logic
+        if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
         attempts <- attempts + 1
       }
       offspring
