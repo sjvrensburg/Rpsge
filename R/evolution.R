@@ -83,7 +83,15 @@ Evolution <- R6::R6Class(
       candidates[order(sapply(candidates, function(x) x$fitness))][[1]]
     },
 
-    crossover = function(p1, p2) {
+    validate_phenotype = function(genotype) {
+      positions_to_map <- rep(0, length(genotype))
+      tryCatch({
+        self$grammar$mapping(genotype, positions_to_map)
+        TRUE
+      }, error = function(e) FALSE)
+    },
+
+    crossover_impl = function(p1, p2) {
       # Initialize new genotype
       genotype <- list()
 
@@ -135,7 +143,17 @@ Evolution <- R6::R6Class(
       )
     },
 
-    mutate = function(ind) {
+    crossover = function(p1, p2) {
+      attempts <- 0
+      repeat {
+        offspring <- crossover_impl(p1, p2)  # Current crossover logic
+        if (validate_phenotype(offspring$genotype) || attempts > 10) break
+        attempts <- attempts + 1
+      }
+      offspring
+    },
+
+    mutate_impl = function(ind) {
       # Mutate each non-terminal's rules
       for (nt in names(ind$genotype)) {
         for (i in seq_along(ind$genotype[[nt]])) {
@@ -171,6 +189,16 @@ Evolution <- R6::R6Class(
 
       ind$fitness <- NA
       ind
+    },
+
+    mutate = function(p1, p2) {
+      attempts <- 0
+      repeat {
+        offspring <- mutate_impl(p1, p2)  # Current mutate logic
+        if (validate_phenotype(offspring$genotype) || attempts > 10) break
+        attempts <- attempts + 1
+      }
+      offspring
     },
 
     update_pcfg = function(best_individual, learning_factor) {
