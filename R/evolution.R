@@ -1,3 +1,12 @@
+# Helper functions
+evaluate_all <- function(pop) {
+  lapply(pop, self$evaluate)
+}
+
+sort_by_fitness <- function(pop) {
+  pop[order(sapply(pop, `[[`, "fitness"))]
+}
+
 Evolution <- R6::R6Class(
   "Evolution",
   public = list(
@@ -207,47 +216,31 @@ Evolution <- R6::R6Class(
     },
 
     update_pcfg = function(best_individual, learning_factor) {
-      for (nt in names(best_individual$genotype)) {
-        # Get non-terminal index
-        nt_index <- self$grammar$index_of_non_terminal[[nt]]
+      # Pre-calculate all rule counts
+      rule_counts <- lapply(names(best_individual$genotype), function(nt) {
+        tabulate(sapply(best_individual$genotype[[nt]], `[[`, 1),
+                 nbins = length(self$grammar$grammar[[nt]]))
+      })
 
-        # Initialize counter for rule frequencies
-        counter <- rep(0, length(self$grammar$grammar[[nt]]))
+      # Vectorized probability updates
+      for (i in seq_along(rule_counts)) {
+        nt <- names(best_individual$genotype)[i]
+        counts <- rule_counts[[i]]
+        total <- sum(counts)
 
-        # Count rule frequencies
-        for (gene in best_individual$genotype[[nt]]) {
-          counter[gene[1]] <- counter[gene[1]] + 1
+        if (total > 0) {
+          old_probs <- self$grammar$pcfg[i,]
+          new_probs <- ifelse(counts > 0,
+                              pmin(old_probs + learning_factor * counts/total, 1),
+                              pmax(old_probs - learning_factor * old_probs, 0))
+          self$grammar$pcfg[i,] <- new_probs / sum(new_probs)
         }
-
-        total <- sum(counter)
-
-        # Update probabilities for each rule
-        for (j in seq_along(counter)) {
-          old_prob <- self$grammar$pcfg[nt_index, j]
-
-          if (counter[j] > 0) {
-            # Increase probability for used rules
-            new_prob <- min(old_prob + learning_factor * (counter[j] / total), 1.0)
-          } else {
-            # Decrease probability for unused rules
-            new_prob <- max(old_prob - learning_factor * old_prob, 0.0)
-          }
-
-          self$grammar$pcfg[nt_index, j] <- new_prob
-        }
-
-        # Normalize probabilities to sum to 1
-        self$grammar$pcfg[nt_index, ] <-
-          self$grammar$pcfg[nt_index, ] / sum(self$grammar$pcfg[nt_index, ])
       }
     },
 
     run_evolution = function() {
-      # Initialize population
-      population <- self$make_initial_population()
-
-      # Evaluate initial population
-      population <- lapply(population, self$evaluate)
+      # Initialize and evaluate population
+      population <- evaluate_all(make_initial_population())
 
       # Tracking variables
       best_overall <- NULL
@@ -256,8 +249,7 @@ Evolution <- R6::R6Class(
 
       # Main evolutionary loop
       for (gen in 1:self$params$generations) {
-        # Sort population by fitness
-        population <- population[order(sapply(population, function(x) x$fitness))]
+        population <- sort_by_fitness(population)
 
         # Update best individuals
         current_best <- population[[1]]

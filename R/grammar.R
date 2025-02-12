@@ -1,3 +1,4 @@
+# Helper functions
 round_prob <- function(x, digits = 3) {
   if (is.null(x) || length(x) == 0) {
     return(x)
@@ -83,10 +84,7 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     parse_production = function(production) {
-      tokens <- regmatches(
-        production,
-        gregexpr("<[^>]+>|[^<>]+", production, perl = TRUE)
-      )[[1]]
+      tokens <- stringr::str_match_all(production, "<[^>]+>|[^<>]+")[[1]][,1]
       tokens <- trimws(tokens)
 
       result <- list()
