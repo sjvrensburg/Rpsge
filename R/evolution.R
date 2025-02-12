@@ -1,8 +1,4 @@
 # Helper functions
-evaluate_all <- function(pop) {
-  lapply(pop, self$evaluate)
-}
-
 sort_by_fitness <- function(pop) {
   pop[order(sapply(pop, `[[`, "fitness"))]
 }
@@ -39,34 +35,19 @@ Evolution <- R6::R6Class(
       }
     },
 
-    generate_random_individual = function(grammar) {
-      # Initialize empty lists for each non-terminal
-      genotype <- lapply(grammar$non_terminals$values(), function(x) list())
-      names(genotype) <- grammar$non_terminals$values()
+    generate_random_individual = function() {
+      genotype <- vector("list", length = length(self$grammar$non_terminals$values()))
+      names(genotype) <- self$grammar$non_terminals$values()
 
-      cat("Initial empty genotype structure:\n")
-      print(str(genotype))
-
-      # Generate the actual content
-      result <- grammar$recursive_individual_creation(
-        genotype,
-        grammar$start_rule[[1]],
-        0
+      result <- self$grammar$recursive_individual_creation(
+        genotype = genotype,
+        symbol = self$grammar$start_rule[[1]],
+        current_depth = 0
       )
-
-      cat("\nGenerated genotype:\n")
-      print(str(result$genotype))
-
-      # Now let's map it to a phenotype
-      positions_to_map <- rep(0, length(result$genotype))
-      mapping_result <- grammar$mapping(result$genotype, positions_to_map)
-
-      cat("\nResulting phenotype:\n")
-      print(mapping_result$phenotype)
 
       list(
         genotype = result$genotype,
-        fitness = NA,
+        fitness = NULL,
         tree_depth = result$depth
       )
     },
@@ -216,51 +197,98 @@ Evolution <- R6::R6Class(
     },
 
     update_pcfg = function(best_individual, learning_factor) {
-      # Pre-calculate all rule counts
-      rule_counts <- lapply(names(best_individual$genotype), function(nt) {
-        tabulate(sapply(best_individual$genotype[[nt]], `[[`, 1),
-                 nbins = length(self$grammar$grammar[[nt]]))
-      })
+      # For each non-terminal in the grammar
+      for (nt in names(best_individual$genotype)) {
+        # Get the index for this non-terminal
+        nt_index <- self$grammar$index_of_non_terminal[[nt]]
 
-      # Vectorized probability updates
-      for (i in seq_along(rule_counts)) {
-        nt <- names(best_individual$genotype)[i]
-        counts <- rule_counts[[i]]
-        total <- sum(counts)
+        # Get the number of possible production rules for this non-terminal
+        n_rules <- ncol(self$grammar$pcfg)
+
+        # Initialize counter vector for rules
+        counter <- integer(n_rules)
+
+        # Count occurrences of each production rule
+        for (gene in best_individual$genotype[[nt]]) {
+          rule_index <- gene[1]
+          counter[rule_index] <- counter[rule_index] + 1
+        }
+
+        # Calculate total number of rules used
+        total <- sum(counter)
 
         if (total > 0) {
-          old_probs <- self$grammar$pcfg[i,]
-          new_probs <- ifelse(counts > 0,
-                              pmin(old_probs + learning_factor * counts/total, 1),
-                              pmax(old_probs - learning_factor * old_probs, 0))
-          self$grammar$pcfg[i,] <- new_probs / sum(new_probs)
+          # Get current probabilities for this non-terminal
+          current_probs <- self$grammar$pcfg[nt_index, ]
+
+          # Update probabilities based on rule usage
+          new_probs <- current_probs
+
+          for (j in seq_along(counter)) {
+            if (counter[j] > 0) {
+              # Increase probability for used rules
+              new_probs[j] <- min(current_probs[j] +
+                                    learning_factor * (counter[j] / total), 1.0)
+            } else {
+              # Decrease probability for unused rules
+              new_probs[j] <- max(current_probs[j] -
+                                    learning_factor * current_probs[j], 0.0)
+            }
+          }
+
+          # Normalize probabilities to ensure they sum to 1
+          self$grammar$pcfg[nt_index, ] <- new_probs / sum(new_probs)
         }
       }
     },
 
+    make_initial_population = function() {
+      population <- vector("list", length = self$params$popsize)
+
+      for (i in seq_len(self$params$popsize)) {
+        individual <- self$generate_random_individual()
+        population[[i]] <- individual
+      }
+
+      return(population)
+    },
+
     run_evolution = function() {
       # Initialize and evaluate population
-      population <- evaluate_all(make_initial_population())
-
+      message("Generating the initial population...")
+      population <- self$make_initial_population()
+      message("Evaluating the initial population...")
+      population <- self$evaluate_all(population)
+      message("Generated and evaluated the initial population...")
       # Tracking variables
       best_overall <- NULL
       best_generation <- NULL
       flag <- FALSE  # Flag for alternating PCFG updates
 
       # Main evolutionary loop
+      message("Starting evolution...")
       for (gen in 1:self$params$generations) {
+        message(sprintf("\tGen %d...", gen))
+        message("\tSorting...")
         population <- sort_by_fitness(population)
-
+        message("\tSorted...")
         # Update best individuals
         current_best <- population[[1]]
+        message("\tCurrent best is:\n")
+        print(current_best$phenotype)
 
         if (is.null(best_overall) || current_best$fitness < best_overall$fitness) {
           best_overall <- current_best
         }
 
+        message("\tBest overal:\n")
+        print(current_best$phenotype)
+
         # Update PCFG probabilities
         best_to_update <- if (!flag) best_overall else current_best
+        message("\tUpdating PCFG probabilities")
         self$update_pcfg(best_to_update, self$params$learning_factor)
+        message("\tUpdated PCFG probabilities")
 
         # Adaptive learning factor
         if (self$params$adaptive_lf) {
@@ -308,6 +336,9 @@ Evolution <- R6::R6Class(
 
       # Return best solution found
       return(best_overall)
+    },
+    evaluate_all = function(pop) {
+      lapply(pop, self$evaluate)
     }
   )
 )
