@@ -84,19 +84,54 @@ Evolution <- R6::R6Class(
     },
 
     crossover = function(p1, p2) {
-      # Create binary mask for each non-terminal
-      genotype <- lapply(seq_along(p1$genotype), function(i) {
-        if (runif(1) < 0.5) p1$genotype[[i]] else p2$genotype[[i]]
-      })
-      names(genotype) <- names(p1$genotype)
+      # Initialize new genotype
+      genotype <- list()
 
-      # Initialize mapping positions
-      mapping_values <- rep(0, length(genotype))
+      # For each non-terminal in grammar
+      for (nt in names(p1$genotype)) {
+        current_nt <- list()
+        nt_index <- self$grammar$index_of_non_terminal[[nt]]
+
+        # Get production counts for both parents
+        p1_productions <- sapply(p1$genotype[[nt]], function(x) x[1])
+        p2_productions <- sapply(p2$genotype[[nt]], function(x) x[1])
+
+        # Get PCFG probabilities
+        probs <- self$grammar$pcfg[nt_index,]
+
+        # For each position that exists in either parent
+        max_len <- max(length(p1_productions), length(p2_productions))
+        for (i in seq_len(max_len)) {
+          if (i <= length(p1_productions) && i <= length(p2_productions)) {
+            # Both parents have this position
+            p1_prob <- probs[p1_productions[i]]
+            p2_prob <- probs[p2_productions[i]]
+
+            # Select based on relative probabilities
+            total_prob <- p1_prob + p2_prob
+            if (runif(1) < p1_prob/total_prob) {
+              current_nt[[i]] <- p1$genotype[[nt]][[i]]
+            } else {
+              current_nt[[i]] <- p2$genotype[[nt]][[i]]
+            }
+          } else if (i <= length(p1_productions)) {
+            # Only p1 has this position
+            current_nt[[i]] <- p1$genotype[[nt]][[i]]
+          } else {
+            # Only p2 has this position
+            current_nt[[i]] <- p2$genotype[[nt]][[i]]
+          }
+        }
+
+        genotype[[nt]] <- current_nt
+      }
+
+      names(genotype) <- names(p1$genotype)
 
       list(
         genotype = genotype,
         fitness = NA,
-        mapping_values = mapping_values
+        mapping_values = rep(0, length(genotype))
       )
     },
 
@@ -107,33 +142,33 @@ Evolution <- R6::R6Class(
           if (runif(1) < self$params$prob_mutation) {
             # Get current values
             current_value <- ind$genotype[[nt]][[i]]
-
-            # Generate new codon with Gaussian mutation
-            codon <- stats::rnorm(1, current_value[2], 0.5)
-            codon <- max(0, min(1, codon))  # Clamp to [0,1]
-
-            # Get non-terminal index
             nt_index <- self$grammar$index_of_non_terminal[[nt]]
 
-            # Select new rule based on mutated codon
-            prob_aux <- 0
-            expansion_possibility <- NULL
+            # Get probability distribution for this non-terminal
+            probs <- self$grammar$pcfg[nt_index,]
 
+            # Calculate variance based on probability distribution
+            # Using entropy as a measure of uncertainty
+            entropy <- -sum(probs * log(probs + 1e-10))
+            variance <- min(0.5, entropy / 2)  # Cap at 0.5
+
+            # Apply Gaussian mutation with dynamic variance
+            codon <- stats::rnorm(1, current_value[2], variance)
+            codon <- max(0, min(1, codon))
+
+            # Select rule based on mutated codon
+            prob_aux <- 0
             for (index in seq_along(self$grammar$grammar[[nt]])) {
               prob_aux <- prob_aux + self$grammar$pcfg[nt_index, index]
               if (codon <= round(prob_aux, 3)) {
-                expansion_possibility <- index
+                ind$genotype[[nt]][[i]] <- c(index, codon, current_value[3])
                 break
               }
             }
-
-            # Update genotype with new rule and codon
-            ind$genotype[[nt]][[i]] <- c(expansion_possibility, codon, current_value[3])
           }
         }
       }
 
-      # Reset fitness since genotype changed
       ind$fitness <- NA
       ind
     },
