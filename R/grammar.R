@@ -347,70 +347,57 @@ Grammar <- R6::R6Class(
       )
     },
     mapping = function(mapping_rules, positions_to_map = NULL) {
-      # Initialize mapping positions if not provided
       if (is.null(positions_to_map)) {
         positions_to_map <- rep(0, length(self$ordered_non_terminals$values()))
       }
 
-      # Start recursive mapping process with empty output
       result <- self$recursive_mapping(
-        mapping_rules = mapping_rules,
-        positions_to_map = positions_to_map,
-        current_sym = self$start_rule,
-        current_depth = 0,
-        output = character(0)
+        mapping_rules,
+        positions_to_map,
+        self$start_rule,
+        0,
+        character(0)
       )
 
-      # Create final phenotype from the collected output tokens
       list(
         phenotype = paste(result$output, collapse = ""),
-        mapping_result = result$depth
+        mapping_result = result$depth,
+        positions = result$positions
       )
     },
-    recursive_mapping = function(mapping_rules, positions_to_map, current_sym,
-                                 current_depth, output) {
+    recursive_mapping = function(mapping_rules, positions_to_map, current_sym, current_depth, output) {
       depths <- current_depth
 
       if (identical(current_sym[[2]], self$T)) {
-        # For terminal symbols, add to our output collection
         output <- c(output, current_sym[[1]])
       } else {
-        # Get position of current non-terminal in our ordered list
         current_sym_pos <- which(sapply(self$ordered_non_terminals$values(),
                                         function(x) identical(x, current_sym[[1]])))
 
-        # Get available production rules
-        choices <- self$grammar[[current_sym[[1]]]]
-
-        # Get the rule index from our genotype
         rule_pos <- positions_to_map[current_sym_pos] + 1
         expansion_possibility <- mapping_rules[[current_sym_pos]][[rule_pos]][[1]]
-
-        # Update position counter
         positions_to_map[current_sym_pos] <- rule_pos
 
-        # Get symbols to process next
-        next_symbols <- choices[[expansion_possibility]]
+        next_symbols <- self$grammar[[current_sym[[1]]]][[expansion_possibility]]
 
-        # Process each symbol, updating our output collection
         for(next_sym in next_symbols) {
           result <- self$recursive_mapping(
-            mapping_rules = mapping_rules,
-            positions_to_map = positions_to_map,
-            current_sym = next_sym,
-            current_depth = current_depth + 1,
-            output = output
+            mapping_rules,
+            positions_to_map,
+            next_sym,
+            current_depth + 1,
+            output
           )
-          # Accumulate output and track maximum depth
           output <- result$output
           depths <- c(depths, result$depth)
+          positions_to_map <- result$positions
         }
       }
 
-      # Return both our collected output and the maximum depth reached
       list(
         output = output,
-        depth = max(depths)
+        depth = max(depths),
+        positions = positions_to_map
       )
     },
     has_terminal = function(terminal) {
