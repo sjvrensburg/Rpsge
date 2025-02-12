@@ -46,36 +46,42 @@ Grammar <- R6::R6Class("Grammar",
                      RULE_SEPARATOR = "::=", # Class attribute RULE_SEPARATOR = "::="
                      PRODUCTION_SEPARATOR = "|", # Class attribute PRODUCTION_SEPARATOR = "|"
 
+                     # Basic attributes
+                     grammar_file = NULL,  # Path to grammar file
+                     grammar = list(),     # Main grammar structure (Python dict equivalent)
+                     productions_labels = list(),  # Production labels dictionary
+
+                     # Sets for terminals and non-terminals
+                     non_terminals = NULL,
+                     terminals = NULL,
+                     ordered_non_terminals = NULL,  # Ordered set of non-terminals
+
+                     # Options and rules
+                     non_recursive_options = list(),  # Non-recursive production options
+                     number_of_options_by_non_terminal = NULL,  # Count of options per non-terminal
+                     start_rule = NULL,  # Starting rule for the grammar
+
+                     # Depth controls
+                     max_depth = NULL,  # Maximum tree depth
+                     max_init_depth = NULL,  # Maximum initial tree depth
+                     max_number_prod_rules = 0,  # Maximum number of production rules
+
+                     # PCFG related attributes
+                     pcfg = NULL,  # Probabilistic Context-Free Grammar matrix
+                     pcfg_mask = NULL,  # Mask for PCFG
+                     pcfg_path = NULL,  # Path to PCFG file
+
+                     # Indexing and paths
+                     index_of_non_terminal = list(),  # Index lookup for non-terminals
+                     shortest_path = list(),  # Shortest paths in grammar
+
                      # Initialize all class attributes
                      initialize = function() {
-                       # Basic attributes
-                       self$grammar_file <- NULL  # Path to grammar file
-                       self$grammar <- list()     # Main grammar structure (Python dict equivalent)
-                       self$productions_labels <- list()  # Production labels dictionary
-
                        # Sets for terminals and non-terminals
                        self$non_terminals <- OrderedUniqueSet$new()
                        self$terminals <- OrderedUniqueSet$new()
-                       self$ordered_non_terminals <- OrderedUniqueSet$new()  # Ordered set of non-terminals
-
-                       # Options and rules
-                       self$non_recursive_options <- list()  # Non-recursive production options
-                       self$number_of_options_by_non_terminal <- NULL  # Count of options per non-terminal
-                       self$start_rule <- NULL  # Starting rule for the grammar
-
-                       # Depth controls
-                       self$max_depth <- NULL  # Maximum tree depth
-                       self$max_init_depth <- NULL  # Maximum initial tree depth
-                       self$max_number_prod_rules <- 0  # Maximum number of production rules
-
-                       # PCFG related attributes
-                       self$pcfg <- NULL  # Probabilistic Context-Free Grammar matrix
-                       self$pcfg_mask <- NULL  # Mask for PCFG
-                       self$pcfg_path <- NULL  # Path to PCFG file
-
-                       # Indexing and paths
-                       self$index_of_non_terminal <- list()  # Index lookup for non-terminals
-                       self$shortest_path <- list()  # Shortest paths in grammar
+                       self$ordered_non_terminals <- OrderedUniqueSet$new()
+                       invisible(self)
                      },
 
                      set_path = function(grammar_path) {

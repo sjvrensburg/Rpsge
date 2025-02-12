@@ -50,3 +50,11 @@ rsconnect/
 .Rproj.user/
 .Rproj.user*
 .Rproj.user
+
+# Compiled code
+*.o
+*.so
+*.dll
+
+# Misc
+*.txt
