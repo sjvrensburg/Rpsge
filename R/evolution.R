@@ -255,49 +255,31 @@ Evolution <- R6::R6Class(
 
     run_evolution = function() {
       # Initialize and evaluate population
-      message("Generating the initial population...")
-      population <- self$make_initial_population()
-      message("Evaluating the initial population...")
-      population <- self$evaluate_all(population)
-      message("Generated and evaluated the initial population...")
+      population <- self$evaluate_all(self$make_initial_population())
       # Tracking variables
       best_overall <- NULL
       best_generation <- NULL
       flag <- FALSE  # Flag for alternating PCFG updates
 
       # Main evolutionary loop
-      message("Starting evolution...")
       for (gen in 1:self$params$generations) {
-        message(sprintf("\tGen %d...", gen))
-        message("\tSorting...")
         population <- sort_by_fitness(population)
-        message("\tSorted...")
         # Update best individuals
         current_best <- population[[1]]
-        message("\tCurrent best is:\n")
-        print(current_best$phenotype)
 
         if (is.null(best_overall) || current_best$fitness < best_overall$fitness) {
           best_overall <- current_best
         }
 
-        message("\tBest overal:\n")
-        print(current_best$phenotype)
-
         # Update PCFG probabilities
         best_to_update <- if (!flag) best_overall else current_best
-        message("\tUpdating PCFG probabilities")
         self$update_pcfg(best_to_update, self$params$learning_factor)
-        message("\tUpdated PCFG probabilities")
 
         # Adaptive learning factor
         if (self$params$adaptive_lf) {
           self$params$learning_factor <-
             self$params$learning_factor + self$params$adaptive_increment
         }
-
-        # Progress output
-        cat(sprintf("Generation %d: Best Fitness = %f\n", gen, current_best$fitness))
 
         # Create new population
         new_population <- list()
