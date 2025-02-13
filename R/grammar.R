@@ -167,7 +167,6 @@ Grammar <- R6::R6Class(
 
       self$pcfg_mask <- self$pcfg != 0
     },
-
     update_pcfg = function(best_individual, learning_factor) {
       if (is.null(best_individual$genotype)) {
         stop("Invalid individual: no genotype found")
