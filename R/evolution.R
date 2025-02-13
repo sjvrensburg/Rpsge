@@ -131,49 +131,21 @@ Evolution <- R6::R6Class(
       )
     },
     crossover_impl = function(p1, p2) {
+      # Create binary mask for each non-terminal
+      mask <- sapply(names(p1$genotype), function(x) sample(0:1, 1))
+
       # Initialize new genotype
       genotype <- list()
 
       # For each non-terminal in grammar
       for (nt in names(p1$genotype)) {
-        current_nt <- list()
-        nt_index <- self$grammar$index_of_non_terminal[[nt]]
-
-        # Get production counts for both parents
-        p1_productions <- sapply(p1$genotype[[nt]], function(x) x[1])
-        p2_productions <- sapply(p2$genotype[[nt]], function(x) x[1])
-
-        # Get PCFG probabilities
-        probs <- self$grammar$pcfg[nt_index, ]
-
-        # For each position that exists in either parent
-        max_len <- max(length(p1_productions), length(p2_productions))
-        for (i in seq_len(max_len)) {
-          if (i <= length(p1_productions) && i <= length(p2_productions)) {
-            # Both parents have this position
-            p1_prob <- probs[p1_productions[i]]
-            p2_prob <- probs[p2_productions[i]]
-
-            # Select based on relative probabilities
-            total_prob <- p1_prob + p2_prob
-            if (runif(1) < p1_prob / total_prob) {
-              current_nt[[i]] <- p1$genotype[[nt]][[i]]
-            } else {
-              current_nt[[i]] <- p2$genotype[[nt]][[i]]
-            }
-          } else if (i <= length(p1_productions)) {
-            # Only p1 has this position
-            current_nt[[i]] <- p1$genotype[[nt]][[i]]
-          } else {
-            # Only p2 has this position
-            current_nt[[i]] <- p2$genotype[[nt]][[i]]
-          }
+        # Select parent based on mask
+        genotype[[nt]] <- if (mask[nt] == 1) {
+          p1$genotype[[nt]]
+        } else {
+          p2$genotype[[nt]]
         }
-
-        genotype[[nt]] <- current_nt
       }
-
-      names(genotype) <- names(p1$genotype)
 
       list(
         genotype = genotype,
@@ -191,28 +163,21 @@ Evolution <- R6::R6Class(
       offspring
     },
     mutate_impl = function(ind) {
-      # Mutate each non-terminal's rules
+      # For each non-terminal
       for (nt in names(ind$genotype)) {
+        # For each codon in the non-terminal
         for (i in seq_along(ind$genotype[[nt]])) {
           if (runif(1) < self$params$prob_mutation) {
             # Get current values
             current_value <- ind$genotype[[nt]][[i]]
-            nt_index <- self$grammar$index_of_non_terminal[[nt]]
 
-            # Get probability distribution for this non-terminal
-            probs <- self$grammar$pcfg[nt_index, ]
+            # Apply Gaussian mutation with N(0, 0.50)
+            codon <- current_value[2] + rnorm(1, 0, 0.50)
+            codon <- max(0, min(1, codon)) # Keep in [0,1]
 
-            # Calculate variance based on probability distribution
-            # Using entropy as a measure of uncertainty
-            entropy <- -sum(probs * log(probs + 1e-10))
-            variance <- min(0.5, entropy / 2) # Cap at 0.5
-
-            # Apply Gaussian mutation with dynamic variance
-            codon <- stats::rnorm(1, current_value[2], variance)
-            codon <- max(0, min(1, codon))
-
-            # Select rule based on mutated codon
+            # Calculate which rule this probability selects
             prob_aux <- 0
+            nt_index <- self$grammar$index_of_non_terminal[[nt]]
             for (index in seq_along(self$grammar$grammar[[nt]])) {
               prob_aux <- prob_aux + self$grammar$pcfg[nt_index, index]
               if (codon <= round(prob_aux, 3)) {

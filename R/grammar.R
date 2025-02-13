@@ -353,7 +353,7 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     recursive_individual_creation = function(genotype, symbol, current_depth = 0) {
-      # Initialize all non-terminal entries as empty lists
+      # Initialize if empty
       if (length(genotype) == 0) {
         for (nt in self$ordered_non_terminals$values()) {
           genotype[[nt[[1]]]] <- list()
@@ -363,6 +363,7 @@ Grammar <- R6::R6Class(
       codon <- runif(1)
       nt_index <- self$index_of_non_terminal[[symbol]]
 
+      # Select rule using PCFG probabilities
       prob_aux <- 0
       expansion_possibility <- 1
       for(index in seq_along(self$grammar[[symbol]])) {
@@ -373,24 +374,23 @@ Grammar <- R6::R6Class(
         }
       }
 
-      # Use name indexing instead of position
-      genotype[[symbol]] <- append(
-        genotype[[symbol]],
-        list(c(expansion_possibility, codon, current_depth))
-      )
+      # Add this choice to the genotype
+      genotype[[symbol]][[length(genotype[[symbol]]) + 1]] <-
+        c(expansion_possibility, codon, current_depth)
 
+      # Recursively handle expansion
       expansion_symbols <- self$grammar[[symbol]][[expansion_possibility]]
       depths <- current_depth
 
       for(sym in expansion_symbols) {
-        if(identical(sym[[2]], self$NT)) {
-          recursive_result <- self$recursive_individual_creation(
+        if(sym[[2]] == self$NT) {
+          result <- self$recursive_individual_creation(
             genotype,
             sym[[1]],
             current_depth + 1
           )
-          genotype <- recursive_result$genotype
-          depths <- c(depths, recursive_result$depth)
+          genotype <- result$genotype
+          depths <- c(depths, result$depth)
         }
       }
 
@@ -501,6 +501,16 @@ Grammar <- R6::R6Class(
     },
     get_max_init_depth = function() {
       self$max_init_depth
+    },
+    normalize_row_probabilities = function(probs) {
+      # Handle zero-sum case
+      if (sum(probs) == 0) {
+        n <- length(probs)
+        return(rep(1/n, n))
+      }
+
+      # Normal normalization
+      probs / sum(probs)
     }
   )
 )
