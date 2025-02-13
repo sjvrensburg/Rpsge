@@ -59,6 +59,7 @@ Grammar <- R6::R6Class(
     terminals = NULL,
     ordered_non_terminals = NULL,
     pcfg = NULL,
+    pcfg_mask = NULL,
     max_depth = NULL,
     max_init_depth = NULL,
     grammar_file = NULL,
@@ -148,24 +149,88 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     generate_uniform_pcfg = function() {
-      if (length(self$grammar) == 0) {
-        return()
-      }
+      if (length(self$grammar) == 0) return()
 
       max_rules <- max(sapply(self$grammar, length))
-      self$pcfg <- matrix(0, nrow = length(self$grammar), ncol = max_rules)
+      self$pcfg <- matrix(0,
+                          nrow = length(self$grammar),
+                          ncol = max_rules)
       rownames(self$pcfg) <- names(self$grammar)
 
       for (i in seq_along(self$grammar)) {
         nt <- names(self$grammar)[i]
         n_rules <- length(self$grammar[[nt]])
         if (n_rules > 0) {
-          prob <- 1.0 / n_rules
-          self$pcfg[i, 1:n_rules] <- prob
+          self$pcfg[i, 1:n_rules] <- 1/n_rules
         }
       }
 
-      invisible(self)
+      self$pcfg_mask <- self$pcfg != 0
+    },
+
+    update_pcfg = function(best_individual, learning_factor) {
+      if (is.null(best_individual$genotype)) {
+        stop("Invalid individual: no genotype found")
+      }
+
+      for (nt in names(best_individual$genotype)) {
+        nt_index <- self$index_of_non_terminal[[nt]]
+        if (is.null(nt_index)) next
+
+        # Count rule usage
+        rule_counts <- integer(ncol(self$pcfg))
+        rule_usage <- best_individual$genotype[[nt]]
+
+        for (gene in rule_usage) {
+          if (!is.null(gene) && length(gene) > 0) {
+            rule_counts[gene[1]] <- rule_counts[gene[1]] + 1
+          }
+        }
+
+        total_used <- sum(rule_counts)
+        if (total_used == 0) next
+
+        current_probs <- self$pcfg[nt_index,]
+        new_probs <- current_probs
+
+        # Update probabilities using equations from paper
+        for (j in seq_along(rule_counts)) {
+          if (rule_counts[j] > 0) {
+            # Increase probability for used rules
+            new_probs[j] <- min(
+              current_probs[j] + learning_factor * (rule_counts[j] / total_used),
+              1.0
+            )
+          } else {
+            # Decrease probability for unused rules
+            new_probs[j] <- max(
+              current_probs[j] - learning_factor * current_probs[j],
+              0.0
+            )
+          }
+        }
+
+        # Normalize the row
+        self$pcfg[nt_index,] <- private$normalize_row_probabilities(new_probs)
+      }
+    },
+    verify_pcfg = function() {
+      if (is.null(self$pcfg)) return(FALSE)
+
+      for (i in seq_len(nrow(self$pcfg))) {
+        active_probs <- self$pcfg[i, self$pcfg_mask[i,]]
+        if (length(active_probs) > 0) {
+          row_sum <- sum(active_probs)
+          if (abs(row_sum - 1) > 1e-6) {
+            warning(sprintf(
+              "Row %d probabilities sum to %f, normalizing",
+              i, row_sum
+            ))
+            self$pcfg[i, self$pcfg_mask[i,]] <- active_probs / row_sum
+          }
+        }
+      }
+      TRUE
     },
     find_shortest_path = function() {
       open_symbols <- OrderedUniqueSet$new()
@@ -411,6 +476,9 @@ Grammar <- R6::R6Class(
       self$ordered_non_terminals
     },
     get_pcfg = function() {
+      if (!self$verify_pcfg()) {
+        stop("PCFG verification failed")
+      }
       self$pcfg
     },
     get_mask = function() {
