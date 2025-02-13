@@ -353,17 +353,18 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     recursive_individual_creation = function(genotype, symbol, current_depth = 0) {
-      # Generate probability for rule selection
-      codon <- runif(1)
+      # Initialize all non-terminal entries as empty lists
+      if (length(genotype) == 0) {
+        for (nt in self$ordered_non_terminals$values()) {
+          genotype[[nt[[1]]]] <- list()
+        }
+      }
 
-      # Get index for the current non-terminal in our PCFG matrix
+      codon <- runif(1)
       nt_index <- self$index_of_non_terminal[[symbol]]
 
-      # Initialize expansion possibility
-      expansion_possibility <- 1
-
-      # Select which rule to use based on probabilities
       prob_aux <- 0
+      expansion_possibility <- 1
       for(index in seq_along(self$grammar[[symbol]])) {
         prob_aux <- prob_aux + self$pcfg[nt_index, index]
         if(codon <= round(prob_aux, 3)) {
@@ -372,39 +373,29 @@ Grammar <- R6::R6Class(
         }
       }
 
-      # Get the position for this non-terminal in our ordered list
-      position <- which(sapply(self$ordered_non_terminals$values(),
-                               function(x) identical(x, symbol)))
-
-      # Create updated genotype with the new rule
-      updated_genotype <- genotype
-      updated_genotype[[position]] <- append(
-        updated_genotype[[position]],
+      # Use name indexing instead of position
+      genotype[[symbol]] <- append(
+        genotype[[symbol]],
         list(c(expansion_possibility, codon, current_depth))
       )
 
-      # Get the symbols we need to expand next
       expansion_symbols <- self$grammar[[symbol]][[expansion_possibility]]
       depths <- current_depth
 
-      # Recursively process all non-terminal symbols in the expansion
       for(sym in expansion_symbols) {
-        if(identical(sym[[2]], self$NT)) { # If it's a non-terminal
-          # Each recursive call returns updated genotype and depth
+        if(identical(sym[[2]], self$NT)) {
           recursive_result <- self$recursive_individual_creation(
-            updated_genotype,
+            genotype,
             sym[[1]],
             current_depth + 1
           )
-          # Update our genotype with changes from recursive call
-          updated_genotype <- recursive_result$genotype
+          genotype <- recursive_result$genotype
           depths <- c(depths, recursive_result$depth)
         }
       }
 
-      # Return both the updated genotype and maximum depth
       list(
-        genotype = updated_genotype,
+        genotype = genotype,
         depth = max(depths)
       )
     },
