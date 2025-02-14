@@ -210,7 +210,7 @@ Grammar <- R6::R6Class(
         }
 
         # Normalize the row
-        self$pcfg[nt_index,] <- private$normalize_row_probabilities(new_probs)
+        self$pcfg[nt_index,] <- self$normalize_row_probabilities(new_probs)
       }
     },
     verify_pcfg = function() {
@@ -519,7 +519,7 @@ Grammar <- R6::R6Class(
 
       # Determine rule position and expansion
       rule_pos <- positions_to_map[current_sym_pos] + 1
-      expansion_possibility <- mapping_rules[[current_sym_pos]][[rule_pos]][[1]]
+      expansion_possibility <- mapping_rules[[ current_sym[[1]] ]][[ rule_pos ]][[1]]
       positions_to_map[current_sym_pos] <- rule_pos
 
       # Get expansion symbols
