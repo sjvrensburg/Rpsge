@@ -5,6 +5,35 @@ sort_by_fitness <- function(pop) {
 
 Evolution <- R6::R6Class(
   "Evolution",
+  private = list(
+    validate_genotype = function(genotype) {
+      if (!is.list(genotype)) {
+        cat("Not a list\n")
+        return(FALSE)
+      }
+
+      required_nts <- sapply(self$grammar$ordered_non_terminals$values(), `[[`, 1)
+      if (!all(required_nts %in% names(genotype))) {
+        cat("Missing NTs:", setdiff(required_nts, names(genotype)), "\n")
+        return(FALSE)
+      }
+
+      for (nt in names(genotype)) {
+        entries <- genotype[[nt]]
+        if (!is.list(entries)) {
+          cat("Entry for", nt, "not a list\n")
+          return(FALSE)
+        }
+        for (entry in entries) {
+          if (!is.numeric(entry) || length(entry) != 3) {
+            cat("Invalid entry for", nt, ":", str(entry), "\n")
+            return(FALSE)
+          }
+        }
+      }
+      TRUE
+    }
+  ),
   public = list(
     grammar = NULL,
     eval_func = NULL,
@@ -20,7 +49,6 @@ Evolution <- R6::R6Class(
       adaptive_increment = 0.0001,
       seed = NULL
     ),
-
     initialize = function(grammar, eval_func, params = list()) {
       self$grammar <- grammar
       self$eval_func <- eval_func
@@ -34,42 +62,57 @@ Evolution <- R6::R6Class(
         set.seed(self$params$seed)
       }
     },
+    map_genotype = function(ind) {
+      if (!private$validate_genotype(ind$genotype)) {
+        return(NULL)
+      }
 
+      # Initialize positions
+      positions_to_map <- rep(0, length(self$grammar$ordered_non_terminals$values()))
+
+      # Map genotype using Grammar class methods
+      result <- self$grammar$mapping(ind$genotype, positions_to_map)
+
+      # Update individual with results
+      ind$phenotype <- result$phenotype
+      ind$mapping_values <- result$positions
+      ind$tree_depth <- result$mapping_result
+
+      ind
+    },
     generate_random_individual = function() {
-      genotype <- vector("list", length = length(self$grammar$non_terminals$values()))
-      names(genotype) <- self$grammar$non_terminals$values()
+      # Initialize genotype with empty lists for all non-terminals
+      genotype <- list()
+      for (nt in names(self$grammar$grammar)) {
+        genotype[[nt]] <- list()
+      }
 
+      # Create initial genotype starting from root
       result <- self$grammar$recursive_individual_creation(
         genotype = genotype,
         symbol = self$grammar$start_rule[[1]],
         current_depth = 0
       )
 
+      # Return complete individual
       list(
         genotype = result$genotype,
         fitness = NULL,
         tree_depth = result$depth
       )
     },
-
     evaluate = function(ind) {
-      # Initialize mapping positions
-      positions_to_map <- rep(0, length(ind$genotype))
+      ind <- self$map_genotype(ind)
+      if (is.null(ind)) {
+        stop("Invalid genotype during evaluation")
+      }
 
-      # Map genotype to phenotype
-      mapping_result <- self$grammar$mapping(ind$genotype, positions_to_map)
-
-      # Evaluate fitness using provided function
-      quality <- self$eval_func(mapping_result[[1]])  # First element is phenotype
-
-      # Update individual with results
-      ind$phenotype <- mapping_result[[1]]
+      quality <- self$eval_func(ind$phenotype)
       ind$fitness <- quality
-      ind$mapping_values <- positions_to_map
+      ind$other_info <- list() # Maintain compatibility
 
       ind
     },
-
     tournament_selection = function(population) {
       # Randomly select tournament_size individuals
       candidates <- sample(population, self$params$tournament_size, replace = FALSE)
@@ -77,59 +120,32 @@ Evolution <- R6::R6Class(
       # Return the individual with best fitness (minimum value)
       candidates[order(sapply(candidates, function(x) x$fitness))][[1]]
     },
-
     validate_phenotype = function(genotype) {
       positions_to_map <- rep(0, length(genotype))
-      tryCatch({
-        self$grammar$mapping(genotype, positions_to_map)
-        TRUE
-      }, error = function(e) FALSE)
+      tryCatch(
+        {
+          self$grammar$mapping(genotype, positions_to_map)
+          TRUE
+        },
+        error = function(e) FALSE
+      )
     },
-
     crossover_impl = function(p1, p2) {
+      # Create binary mask for each non-terminal
+      mask <- sapply(names(p1$genotype), function(x) sample(0:1, 1))
+
       # Initialize new genotype
       genotype <- list()
 
       # For each non-terminal in grammar
       for (nt in names(p1$genotype)) {
-        current_nt <- list()
-        nt_index <- self$grammar$index_of_non_terminal[[nt]]
-
-        # Get production counts for both parents
-        p1_productions <- sapply(p1$genotype[[nt]], function(x) x[1])
-        p2_productions <- sapply(p2$genotype[[nt]], function(x) x[1])
-
-        # Get PCFG probabilities
-        probs <- self$grammar$pcfg[nt_index,]
-
-        # For each position that exists in either parent
-        max_len <- max(length(p1_productions), length(p2_productions))
-        for (i in seq_len(max_len)) {
-          if (i <= length(p1_productions) && i <= length(p2_productions)) {
-            # Both parents have this position
-            p1_prob <- probs[p1_productions[i]]
-            p2_prob <- probs[p2_productions[i]]
-
-            # Select based on relative probabilities
-            total_prob <- p1_prob + p2_prob
-            if (runif(1) < p1_prob/total_prob) {
-              current_nt[[i]] <- p1$genotype[[nt]][[i]]
-            } else {
-              current_nt[[i]] <- p2$genotype[[nt]][[i]]
-            }
-          } else if (i <= length(p1_productions)) {
-            # Only p1 has this position
-            current_nt[[i]] <- p1$genotype[[nt]][[i]]
-          } else {
-            # Only p2 has this position
-            current_nt[[i]] <- p2$genotype[[nt]][[i]]
-          }
+        # Select parent based on mask
+        genotype[[nt]] <- if (mask[nt] == 1) {
+          p1$genotype[[nt]]
+        } else {
+          p2$genotype[[nt]]
         }
-
-        genotype[[nt]] <- current_nt
       }
-
-      names(genotype) <- names(p1$genotype)
 
       list(
         genotype = genotype,
@@ -137,40 +153,31 @@ Evolution <- R6::R6Class(
         mapping_values = rep(0, length(genotype))
       )
     },
-
     crossover = function(p1, p2) {
       attempts <- 0
       repeat {
-        offspring <- self$crossover_impl(p1, p2)  # Current crossover logic
+        offspring <- self$crossover_impl(p1, p2) # Current crossover logic
         if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
         attempts <- attempts + 1
       }
       offspring
     },
-
     mutate_impl = function(ind) {
-      # Mutate each non-terminal's rules
+      # For each non-terminal
       for (nt in names(ind$genotype)) {
+        # For each codon in the non-terminal
         for (i in seq_along(ind$genotype[[nt]])) {
           if (runif(1) < self$params$prob_mutation) {
             # Get current values
             current_value <- ind$genotype[[nt]][[i]]
-            nt_index <- self$grammar$index_of_non_terminal[[nt]]
 
-            # Get probability distribution for this non-terminal
-            probs <- self$grammar$pcfg[nt_index,]
+            # Apply Gaussian mutation with N(0, 0.50)
+            codon <- current_value[2] + rnorm(1, 0, 0.50)
+            codon <- max(0, min(1, codon)) # Keep in [0,1]
 
-            # Calculate variance based on probability distribution
-            # Using entropy as a measure of uncertainty
-            entropy <- -sum(probs * log(probs + 1e-10))
-            variance <- min(0.5, entropy / 2)  # Cap at 0.5
-
-            # Apply Gaussian mutation with dynamic variance
-            codon <- stats::rnorm(1, current_value[2], variance)
-            codon <- max(0, min(1, codon))
-
-            # Select rule based on mutated codon
+            # Calculate which rule this probability selects
             prob_aux <- 0
+            nt_index <- self$grammar$index_of_non_terminal[[nt]]
             for (index in seq_along(self$grammar$grammar[[nt]])) {
               prob_aux <- prob_aux + self$grammar$pcfg[nt_index, index]
               if (codon <= round(prob_aux, 3)) {
@@ -185,17 +192,15 @@ Evolution <- R6::R6Class(
       ind$fitness <- NA
       ind
     },
-
     mutate = function(p) {
       attempts <- 0
       repeat {
-        offspring <- self$mutate_impl(p)  # Current mutate logic
+        offspring <- self$mutate_impl(p) # Current mutate logic
         if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
         attempts <- attempts + 1
       }
       offspring
     },
-
     update_pcfg = function(best_individual, learning_factor) {
       # For each non-terminal in the grammar
       for (nt in names(best_individual$genotype)) {
@@ -228,11 +233,11 @@ Evolution <- R6::R6Class(
             if (counter[j] > 0) {
               # Increase probability for used rules
               new_probs[j] <- min(current_probs[j] +
-                                    learning_factor * (counter[j] / total), 1.0)
+                learning_factor * (counter[j] / total), 1.0)
             } else {
               # Decrease probability for unused rules
               new_probs[j] <- max(current_probs[j] -
-                                    learning_factor * current_probs[j], 0.0)
+                learning_factor * current_probs[j], 0.0)
             }
           }
 
@@ -241,7 +246,6 @@ Evolution <- R6::R6Class(
         }
       }
     },
-
     make_initial_population = function() {
       population <- vector("list", length = self$params$popsize)
 
@@ -252,14 +256,13 @@ Evolution <- R6::R6Class(
 
       return(population)
     },
-
     run_evolution = function() {
       # Initialize and evaluate population
       population <- self$evaluate_all(self$make_initial_population())
       # Tracking variables
       best_overall <- NULL
       best_generation <- NULL
-      flag <- FALSE  # Flag for alternating PCFG updates
+      flag <- FALSE # Flag for alternating PCFG updates
 
       # Main evolutionary loop
       for (gen in 1:self$params$generations) {
@@ -313,7 +316,7 @@ Evolution <- R6::R6Class(
 
         # Update tracking
         best_generation <- population[[1]]
-        flag <- !flag  # Toggle flag for next generation
+        flag <- !flag # Toggle flag for next generation
       }
 
       # Return best solution found
@@ -321,6 +324,9 @@ Evolution <- R6::R6Class(
     },
     evaluate_all = function(pop) {
       lapply(pop, self$evaluate)
+    },
+    print_genotype = function(ind) {
+      str(ind$genotype)
     }
   )
 )

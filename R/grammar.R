@@ -59,6 +59,7 @@ Grammar <- R6::R6Class(
     terminals = NULL,
     ordered_non_terminals = NULL,
     pcfg = NULL,
+    pcfg_mask = NULL,
     max_depth = NULL,
     max_init_depth = NULL,
     grammar_file = NULL,
@@ -148,24 +149,87 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     generate_uniform_pcfg = function() {
-      if (length(self$grammar) == 0) {
-        return()
-      }
+      if (length(self$grammar) == 0) return()
 
       max_rules <- max(sapply(self$grammar, length))
-      self$pcfg <- matrix(0, nrow = length(self$grammar), ncol = max_rules)
+      self$pcfg <- matrix(0,
+                          nrow = length(self$grammar),
+                          ncol = max_rules)
       rownames(self$pcfg) <- names(self$grammar)
 
       for (i in seq_along(self$grammar)) {
         nt <- names(self$grammar)[i]
         n_rules <- length(self$grammar[[nt]])
         if (n_rules > 0) {
-          prob <- 1.0 / n_rules
-          self$pcfg[i, 1:n_rules] <- prob
+          self$pcfg[i, 1:n_rules] <- 1/n_rules
         }
       }
 
-      invisible(self)
+      self$pcfg_mask <- self$pcfg != 0
+    },
+    update_pcfg = function(best_individual, learning_factor) {
+      if (is.null(best_individual$genotype)) {
+        stop("Invalid individual: no genotype found")
+      }
+
+      for (nt in names(best_individual$genotype)) {
+        nt_index <- self$index_of_non_terminal[[nt]]
+        if (is.null(nt_index)) next
+
+        # Count rule usage
+        rule_counts <- integer(ncol(self$pcfg))
+        rule_usage <- best_individual$genotype[[nt]]
+
+        for (gene in rule_usage) {
+          if (!is.null(gene) && length(gene) > 0) {
+            rule_counts[gene[1]] <- rule_counts[gene[1]] + 1
+          }
+        }
+
+        total_used <- sum(rule_counts)
+        if (total_used == 0) next
+
+        current_probs <- self$pcfg[nt_index,]
+        new_probs <- current_probs
+
+        # Update probabilities using equations from paper
+        for (j in seq_along(rule_counts)) {
+          if (rule_counts[j] > 0) {
+            # Increase probability for used rules
+            new_probs[j] <- min(
+              current_probs[j] + learning_factor * (rule_counts[j] / total_used),
+              1.0
+            )
+          } else {
+            # Decrease probability for unused rules
+            new_probs[j] <- max(
+              current_probs[j] - learning_factor * current_probs[j],
+              0.0
+            )
+          }
+        }
+
+        # Normalize the row
+        self$pcfg[nt_index,] <- self$normalize_row_probabilities(new_probs)
+      }
+    },
+    verify_pcfg = function() {
+      if (is.null(self$pcfg)) return(FALSE)
+
+      for (i in seq_len(nrow(self$pcfg))) {
+        active_probs <- self$pcfg[i, self$pcfg_mask[i,]]
+        if (length(active_probs) > 0) {
+          row_sum <- sum(active_probs)
+          if (abs(row_sum - 1) > 1e-6) {
+            warning(sprintf(
+              "Row %d probabilities sum to %f, normalizing",
+              i, row_sum
+            ))
+            self$pcfg[i, self$pcfg_mask[i,]] <- active_probs / row_sum
+          }
+        }
+      }
+      TRUE
     },
     find_shortest_path = function() {
       open_symbols <- OrderedUniqueSet$new()
@@ -289,58 +353,81 @@ Grammar <- R6::R6Class(
       invisible(self)
     },
     recursive_individual_creation = function(genotype, symbol, current_depth = 0) {
-      # Generate probability for rule selection
-      codon <- runif(1)
+      # Validate max depth setting
+      if (is.null(self$max_depth)) {
+        stop("Maximum tree depth must be set before individual creation")
+      }
 
-      # Get index for the current non-terminal in our PCFG matrix
-      nt_index <- self$index_of_non_terminal[[symbol]]
+      # Early termination if max depth is exceeded
+      if (current_depth >= self$max_depth) {
+        # Retrieve non-recursive options
+        non_recursive_info <- self$non_recursive_options[[symbol]]
 
-      # Initialize expansion possibility
-      expansion_possibility <- 1
+        # If no non-recursive options, return current state
+        if (length(non_recursive_info$productions) == 0) {
+          return(list(
+            genotype = genotype,
+            depth = current_depth
+          ))
+        }
 
-      # Select which rule to use based on probabilities
-      prob_aux <- 0
-      for(index in seq_along(self$grammar[[symbol]])) {
-        prob_aux <- prob_aux + self$pcfg[nt_index, index]
-        if(codon <= round(prob_aux, 3)) {
-          expansion_possibility <- index
-          break
+        # Select from non-recursive options
+        nt_index <- self$index_of_non_terminal[[symbol]]
+        non_recursive_indices <- sapply(non_recursive_info$productions, `[[`, "index")
+
+        # Adjust probabilities for non-recursive rules
+        non_recursive_probs <- self$pcfg[nt_index, non_recursive_indices]
+        non_recursive_probs <- non_recursive_probs / sum(non_recursive_probs)
+
+        # Select rule
+        codon <- runif(1)
+        prob_aux <- 0
+        for (i in seq_along(non_recursive_indices)) {
+          prob_aux <- prob_aux + non_recursive_probs[i]
+          if (codon <= prob_aux) {
+            expansion_possibility <- non_recursive_indices[i]
+            break
+          }
+        }
+      } else {
+        # Normal rule selection process
+        codon <- runif(1)
+        nt_index <- self$index_of_non_terminal[[symbol]]
+
+        # Select rule using PCFG probabilities
+        prob_aux <- 0
+        expansion_possibility <- 1
+        for(index in seq_along(self$grammar[[symbol]])) {
+          prob_aux <- prob_aux + self$pcfg[nt_index, index]
+          if(codon <= round(prob_aux, 3)) {
+            expansion_possibility <- index
+            break
+          }
         }
       }
 
-      # Get the position for this non-terminal in our ordered list
-      position <- which(sapply(self$ordered_non_terminals$values(),
-                               function(x) identical(x, symbol)))
+      # Add this choice to the genotype
+      genotype[[symbol]][[length(genotype[[symbol]]) + 1]] <-
+        c(expansion_possibility, codon, current_depth)
 
-      # Create updated genotype with the new rule
-      updated_genotype <- genotype
-      updated_genotype[[position]] <- append(
-        updated_genotype[[position]],
-        list(c(expansion_possibility, codon, current_depth))
-      )
-
-      # Get the symbols we need to expand next
+      # Recursively handle expansion
       expansion_symbols <- self$grammar[[symbol]][[expansion_possibility]]
       depths <- current_depth
 
-      # Recursively process all non-terminal symbols in the expansion
       for(sym in expansion_symbols) {
-        if(identical(sym[[2]], self$NT)) { # If it's a non-terminal
-          # Each recursive call returns updated genotype and depth
-          recursive_result <- self$recursive_individual_creation(
-            updated_genotype,
+        if(sym[[2]] == self$NT) {
+          result <- self$recursive_individual_creation(
+            genotype,
             sym[[1]],
             current_depth + 1
           )
-          # Update our genotype with changes from recursive call
-          updated_genotype <- recursive_result$genotype
-          depths <- c(depths, recursive_result$depth)
+          genotype <- result$genotype
+          depths <- c(depths, result$depth)
         }
       }
 
-      # Return both the updated genotype and maximum depth
       list(
-        genotype = updated_genotype,
+        genotype = genotype,
         depth = max(depths)
       )
     },
@@ -364,34 +451,99 @@ Grammar <- R6::R6Class(
       )
     },
     recursive_mapping = function(mapping_rules, positions_to_map, current_sym, current_depth, output) {
-      depths <- current_depth
-
-      if (identical(current_sym[[2]], self$T)) {
-        output <- c(output, current_sym[[1]])
-      } else {
-        current_sym_pos <- which(sapply(self$ordered_non_terminals$values(),
-                                        function(x) identical(x, current_sym[[1]])))
-
-        rule_pos <- positions_to_map[current_sym_pos] + 1
-        expansion_possibility <- mapping_rules[[current_sym_pos]][[rule_pos]][[1]]
-        positions_to_map[current_sym_pos] <- rule_pos
-
-        next_symbols <- self$grammar[[current_sym[[1]]]][[expansion_possibility]]
-
-        for(next_sym in next_symbols) {
-          result <- self$recursive_mapping(
-            mapping_rules,
-            positions_to_map,
-            next_sym,
-            current_depth + 1,
-            output
-          )
-          output <- result$output
-          depths <- c(depths, result$depth)
-          positions_to_map <- result$positions
-        }
+      # Validate maximum depth setting
+      if (is.null(self$max_depth)) {
+        stop("Maximum tree depth must be set before mapping")
       }
 
+      # Depth limit enforcement
+      if (current_depth >= self$max_depth) {
+        # Early termination when max depth is reached
+        if (current_sym[[2]] == self$T) {
+          # If it's a terminal, add it to output
+          output <- c(output, current_sym[[1]])
+        } else {
+          # For non-terminals at max depth, use non-recursive options
+          non_recursive_info <- self$non_recursive_options[[current_sym[[1]]]]
+
+          # If no non-recursive options exist, return current state
+          if (length(non_recursive_info$productions) == 0) {
+            return(list(
+              output = output,
+              depth = current_depth,
+              positions = positions_to_map
+            ))
+          }
+
+          # Select a non-recursive production
+          nt_index <- self$index_of_non_terminal[[current_sym[[1]]]]
+          non_recursive_indices <- sapply(non_recursive_info$productions, `[[`, "index")
+
+          # Adjust probabilities for non-recursive rules
+          non_recursive_probs <- self$pcfg[nt_index, non_recursive_indices]
+          non_recursive_probs <- non_recursive_probs / sum(non_recursive_probs)
+
+          # Use the first available non-recursive production
+          # This maintains the original method's deterministic behavior
+          selected_production <- self$grammar[[current_sym[[1]]]][[non_recursive_indices[1]]]
+
+          # Process the selected production
+          for (symbol in selected_production) {
+            if (symbol[[2]] == self$T) {
+              output <- c(output, symbol[[1]])
+            }
+          }
+        }
+
+        # Return the mapping result at max depth
+        return(list(
+          output = output,
+          depth = current_depth,
+          positions = positions_to_map
+        ))
+      }
+
+      # Original mapping logic for terminals
+      if (identical(current_sym[[2]], self$T)) {
+        output <- c(output, current_sym[[1]])
+        return(list(
+          output = output,
+          depth = current_depth,
+          positions = positions_to_map
+        ))
+      }
+
+      # Locate the current symbol's position in ordered non-terminals
+      current_sym_pos <- which(sapply(self$ordered_non_terminals$values(),
+                                      function(x) identical(x, current_sym[[1]])))
+
+      # Determine rule position and expansion
+      rule_pos <- positions_to_map[current_sym_pos] + 1
+      expansion_possibility <- mapping_rules[[ current_sym[[1]] ]][[ rule_pos ]][[1]]
+      positions_to_map[current_sym_pos] <- rule_pos
+
+      # Get expansion symbols
+      next_symbols <- self$grammar[[current_sym[[1]]]][[expansion_possibility]]
+
+      # Track maximum depth reached
+      depths <- current_depth
+
+      # Recursively process each symbol in the expansion
+      for(next_sym in next_symbols) {
+        result <- self$recursive_mapping(
+          mapping_rules,
+          positions_to_map,
+          next_sym,
+          current_depth + 1,
+          output
+        )
+
+        output <- result$output
+        depths <- c(depths, result$depth)
+        positions_to_map <- result$positions
+      }
+
+      # Return mapping results
       list(
         output = output,
         depth = max(depths),
@@ -411,6 +563,9 @@ Grammar <- R6::R6Class(
       self$ordered_non_terminals
     },
     get_pcfg = function() {
+      if (!self$verify_pcfg()) {
+        stop("PCFG verification failed")
+      }
       self$pcfg
     },
     get_mask = function() {
@@ -443,6 +598,16 @@ Grammar <- R6::R6Class(
     },
     get_max_init_depth = function() {
       self$max_init_depth
+    },
+    normalize_row_probabilities = function(probs) {
+      # Handle zero-sum case
+      if (sum(probs) == 0) {
+        n <- length(probs)
+        return(rep(1/n, n))
+      }
+
+      # Normal normalization
+      probs / sum(probs)
     }
   )
 )
