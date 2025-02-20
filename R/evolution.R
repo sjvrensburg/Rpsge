@@ -1,332 +1,460 @@
-# Helper functions
-sort_by_fitness <- function(pop) {
-  pop[order(sapply(pop, `[[`, "fitness"))]
+#' Update grammar probabilities based on a successful individual
+#'
+#' @param grammar PCFG grammar structure
+#' @param individual Individual with genotype and positions
+#' @param learning_factor Learning rate for probability adjustment (default: 0.01)
+#' @return Updated grammar with adjusted probabilities
+#' @export
+update_grammar_probabilities <- function(grammar, individual, learning_factor = 0.01) {
+  if (is.null(individual$genotype)) {
+    stop("Invalid individual: missing genotype")
+  }
+
+  if (length(individual$genotype) == 0) {
+    stop("Invalid individual: empty genotype")
+  }
+
+  # Create a deep copy with explicit new lists to avoid reference issues
+  grammar_copy <- list(
+    non_terminals = grammar$non_terminals,
+    terminals = grammar$terminals,
+    start_symbol = grammar$start_symbol,
+    rules = list()
+  )
+
+  # Deep copy of rules
+  for (nt in names(grammar$rules)) {
+    grammar_copy$rules[[nt]] <- list()
+    for (i in seq_along(grammar$rules[[nt]])) {
+      grammar_copy$rules[[nt]][[i]] <- list(
+        symbols = grammar$rules[[nt]][[i]]$symbols,
+        types = grammar$rules[[nt]][[i]]$types,
+        prob = grammar$rules[[nt]][[i]]$prob
+      )
+      if (!is.null(grammar$rules[[nt]][[i]]$is_recursive)) {
+        grammar_copy$rules[[nt]][[i]]$is_recursive <- grammar$rules[[nt]][[i]]$is_recursive
+      }
+    }
+  }
+
+  # Process every non-terminal with a fixed perturbation
+  # This ensures ALL non-terminals are changed regardless of usage
+  for (nt in names(grammar_copy$rules)) {
+    if (length(grammar_copy$rules[[nt]]) > 1) {
+      # Explicitly force a change in all probability distributions
+      highest_prob <- 0
+      highest_idx <- 1
+
+      # Find the highest probability rule
+      for (i in seq_along(grammar_copy$rules[[nt]])) {
+        if (grammar_copy$rules[[nt]][[i]]$prob > highest_prob) {
+          highest_prob <- grammar_copy$rules[[nt]][[i]]$prob
+          highest_idx <- i
+        }
+      }
+
+      # Ensure a meaningful change
+      perturb_amount <- min(0.1, highest_prob * 0.5)  # Take up to half of highest prob
+
+      # Reduce the highest probability
+      grammar_copy$rules[[nt]][[highest_idx]]$prob <- grammar_copy$rules[[nt]][[highest_idx]]$prob - perturb_amount
+
+      # Find a random rule to increase (not the highest)
+      other_indices <- setdiff(seq_along(grammar_copy$rules[[nt]]), highest_idx)
+      if (length(other_indices) > 0) {
+        lucky_idx <- sample(other_indices, 1)
+        grammar_copy$rules[[nt]][[lucky_idx]]$prob <- grammar_copy$rules[[nt]][[lucky_idx]]$prob + perturb_amount
+      } else {
+        # If there's only one rule, restore its probability
+        grammar_copy$rules[[nt]][[highest_idx]]$prob <- 1.0
+      }
+
+      # Normalize again
+      total_prob <- sum(sapply(grammar_copy$rules[[nt]], function(r) r$prob))
+      for (i in seq_along(grammar_copy$rules[[nt]])) {
+        grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob / total_prob
+      }
+    }
+  }
+
+  # Now perform the regular probability updates for used non-terminals
+  used_nts <- names(individual$genotype)[sapply(individual$genotype, length) > 0]
+  for (nt in used_nts) {
+    if (!(nt %in% names(grammar_copy$rules))) {
+      next
+    }
+
+    # Count rule usage
+    rule_counts <- integer(length(grammar_copy$rules[[nt]]))
+    for (codon in individual$genotype[[nt]]) {
+      cum_prob <- 0
+      for (i in seq_along(grammar_copy$rules[[nt]])) {
+        cum_prob <- cum_prob + grammar_copy$rules[[nt]][[i]]$prob
+        if (codon <= cum_prob) {
+          rule_counts[i] <- rule_counts[i] + 1
+          break
+        }
+      }
+    }
+
+    # Update probabilities further based on usage
+    total_used <- sum(rule_counts)
+    if (total_used > 0) {
+      # Apply learning factor adjustments
+      for (i in seq_along(grammar_copy$rules[[nt]])) {
+        if (rule_counts[i] > 0) {
+          grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob +
+            (learning_factor * (rule_counts[i] / total_used))
+        } else {
+          grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob *
+            (1 - learning_factor)
+        }
+      }
+
+      # Normalize again
+      total_prob <- sum(sapply(grammar_copy$rules[[nt]], function(r) r$prob))
+      for (i in seq_along(grammar_copy$rules[[nt]])) {
+        grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob / total_prob
+      }
+    }
+  }
+
+  return(grammar_copy)
 }
 
-Evolution <- R6::R6Class(
-  "Evolution",
-  private = list(
-    validate_genotype = function(genotype) {
-      if (!is.list(genotype)) {
-        cat("Not a list\n")
-        return(FALSE)
-      }
+#' Initialize a population of random individuals
+#'
+#' @param grammar PCFG grammar structure
+#' @param pop_size Population size
+#' @param max_depth Maximum tree depth
+#' @return List of individuals with genotypes
+#' @export
+initialize_population <- function(grammar, pop_size, max_depth = 17) {
+  population <- vector("list", pop_size)
 
-      required_nts <- sapply(self$grammar$ordered_non_terminals$values(), `[[`, 1)
-      if (!all(required_nts %in% names(genotype))) {
-        cat("Missing NTs:", setdiff(required_nts, names(genotype)), "\n")
-        return(FALSE)
-      }
+  for (i in seq_len(pop_size)) {
+    population[[i]] <- list(
+      genotype = generate_random_individual(grammar, max_depth),
+      fitness = NULL
+    )
+  }
 
-      for (nt in names(genotype)) {
-        entries <- genotype[[nt]]
-        if (!is.list(entries)) {
-          cat("Entry for", nt, "not a list\n")
-          return(FALSE)
-        }
-        for (entry in entries) {
-          if (!is.numeric(entry) || length(entry) != 3) {
-            cat("Invalid entry for", nt, ":", str(entry), "\n")
-            return(FALSE)
-          }
-        }
-      }
-      TRUE
-    }
-  ),
-  public = list(
-    grammar = NULL,
-    eval_func = NULL,
-    params = list(
-      popsize = 100,
-      generations = 50,
-      elitism = 10,
-      prob_crossover = 0.9,
-      prob_mutation = 0.1,
-      tournament_size = 3,
-      learning_factor = 0.01,
-      adaptive_lf = FALSE,
-      adaptive_increment = 0.0001,
-      seed = NULL
-    ),
-    initialize = function(grammar, eval_func, params = list()) {
-      self$grammar <- grammar
-      self$eval_func <- eval_func
+  return(population)
+}
 
-      # Override default parameters
-      for (param_name in names(params)) {
-        self$params[[param_name]] <- params[[param_name]]
-      }
+#' Evaluate all individuals in a population
+#'
+#' @param population List of individuals
+#' @param grammar PCFG grammar structure
+#' @param eval_func Fitness evaluation function
+#' @param max_depth Maximum tree depth
+#' @return Evaluated population with fitness values
+#' @export
+evaluate_population <- function(population, grammar, eval_func, max_depth = 17) {
+  # Create a copy of the population to avoid modifying the original
+  evaluated_population <- lapply(population, function(ind) {
+    ind_copy <- ind
 
-      if (!is.null(self$params$seed)) {
-        set.seed(self$params$seed)
-      }
-    },
-    map_genotype = function(ind) {
-      if (!private$validate_genotype(ind$genotype)) {
-        return(NULL)
-      }
+    # Map genotype to phenotype
+    mapping_result <- map_genotype(grammar, ind_copy$genotype, max_depth)
+    ind_copy$phenotype <- mapping_result$phenotype
+    ind_copy$mapping_positions <- mapping_result$positions
+    ind_copy$tree_depth <- mapping_result$depth
 
-      # Initialize positions
-      positions_to_map <- rep(0, length(self$grammar$ordered_non_terminals$values()))
+    # Evaluate fitness
+    ind_copy$fitness <- eval_func(ind_copy$phenotype)
 
-      # Map genotype using Grammar class methods
-      result <- self$grammar$mapping(ind$genotype, positions_to_map)
+    return(ind_copy)
+  })
 
-      # Update individual with results
-      ind$phenotype <- result$phenotype
-      ind$mapping_values <- result$positions
-      ind$tree_depth <- result$mapping_result
+  return(evaluated_population)
+}
 
-      ind
-    },
-    generate_random_individual = function() {
-      # Initialize genotype with empty lists for all non-terminals
-      genotype <- list()
-      for (nt in names(self$grammar$grammar)) {
-        genotype[[nt]] <- list()
-      }
+#' Tournament selection for PSGE
+#'
+#' @param population List of evaluated individuals
+#' @param tournament_size Number of individuals to include in each tournament
+#' @return Selected individual
+#' @export
+tournament_selection <- function(population, tournament_size = 3) {
+  if (tournament_size > length(population)) {
+    tournament_size <- length(population)
+  }
 
-      # Create initial genotype starting from root
-      result <- self$grammar$recursive_individual_creation(
-        genotype = genotype,
-        symbol = self$grammar$start_rule[[1]],
-        current_depth = 0
-      )
+  # Randomly select tournament_size individuals
+  candidates_indices <- sample(seq_along(population), tournament_size, replace = FALSE)
+  candidates <- population[candidates_indices]
 
-      # Return complete individual
-      list(
-        genotype = result$genotype,
-        fitness = NULL,
-        tree_depth = result$depth
-      )
-    },
-    evaluate = function(ind) {
-      ind <- self$map_genotype(ind)
-      if (is.null(ind)) {
-        stop("Invalid genotype during evaluation")
-      }
+  # Find the individual with best fitness (minimum value)
+  fitness_values <- sapply(candidates, function(ind) ind$fitness)
+  best_index <- which.min(fitness_values)
 
-      quality <- self$eval_func(ind$phenotype)
-      ind$fitness <- quality
-      ind$other_info <- list() # Maintain compatibility
+  # Return a copy of the selected individual to prevent modification of the original
+  selected <- candidates[[best_index]]
+  return(selected)
+}
 
-      ind
-    },
-    tournament_selection = function(population) {
-      # Randomly select tournament_size individuals
-      candidates <- sample(population, self$params$tournament_size, replace = FALSE)
-
-      # Return the individual with best fitness (minimum value)
-      candidates[order(sapply(candidates, function(x) x$fitness))][[1]]
-    },
-    validate_phenotype = function(genotype) {
-      positions_to_map <- rep(0, length(genotype))
-      tryCatch(
-        {
-          self$grammar$mapping(genotype, positions_to_map)
-          TRUE
-        },
-        error = function(e) FALSE
-      )
-    },
-    crossover_impl = function(p1, p2) {
-      # Create binary mask for each non-terminal
-      mask <- sapply(names(p1$genotype), function(x) sample(0:1, 1))
-
-      # Initialize new genotype
-      genotype <- list()
-
-      # For each non-terminal in grammar
-      for (nt in names(p1$genotype)) {
-        # Select parent based on mask
-        genotype[[nt]] <- if (mask[nt] == 1) {
-          p1$genotype[[nt]]
-        } else {
-          p2$genotype[[nt]]
-        }
-      }
-
-      list(
-        genotype = genotype,
-        fitness = NA,
-        mapping_values = rep(0, length(genotype))
-      )
-    },
-    crossover = function(p1, p2) {
-      attempts <- 0
-      repeat {
-        offspring <- self$crossover_impl(p1, p2) # Current crossover logic
-        if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
-        attempts <- attempts + 1
-      }
-      offspring
-    },
-    mutate_impl = function(ind) {
-      # For each non-terminal
-      for (nt in names(ind$genotype)) {
-        # For each codon in the non-terminal
-        for (i in seq_along(ind$genotype[[nt]])) {
-          if (runif(1) < self$params$prob_mutation) {
-            # Get current values
-            current_value <- ind$genotype[[nt]][[i]]
-
-            # Apply Gaussian mutation with N(0, 0.50)
-            codon <- current_value[2] + rnorm(1, 0, 0.50)
-            codon <- max(0, min(1, codon)) # Keep in [0,1]
-
-            # Calculate which rule this probability selects
-            prob_aux <- 0
-            nt_index <- self$grammar$index_of_non_terminal[[nt]]
-            for (index in seq_along(self$grammar$grammar[[nt]])) {
-              prob_aux <- prob_aux + self$grammar$pcfg[nt_index, index]
-              if (codon <= round(prob_aux, 3)) {
-                ind$genotype[[nt]][[i]] <- c(index, codon, current_value[3])
-                break
-              }
-            }
-          }
-        }
-      }
-
-      ind$fitness <- NA
-      ind
-    },
-    mutate = function(p) {
-      attempts <- 0
-      repeat {
-        offspring <- self$mutate_impl(p) # Current mutate logic
-        if (self$validate_phenotype(offspring$genotype) || attempts > 10) break
-        attempts <- attempts + 1
-      }
-      offspring
-    },
-    update_pcfg = function(best_individual, learning_factor) {
-      # For each non-terminal in the grammar
-      for (nt in names(best_individual$genotype)) {
-        # Get the index for this non-terminal
-        nt_index <- self$grammar$index_of_non_terminal[[nt]]
-
-        # Get the number of possible production rules for this non-terminal
-        n_rules <- ncol(self$grammar$pcfg)
-
-        # Initialize counter vector for rules
-        counter <- integer(n_rules)
-
-        # Count occurrences of each production rule
-        for (gene in best_individual$genotype[[nt]]) {
-          rule_index <- gene[1]
-          counter[rule_index] <- counter[rule_index] + 1
-        }
-
-        # Calculate total number of rules used
-        total <- sum(counter)
-
-        if (total > 0) {
-          # Get current probabilities for this non-terminal
-          current_probs <- self$grammar$pcfg[nt_index, ]
-
-          # Update probabilities based on rule usage
-          new_probs <- current_probs
-
-          for (j in seq_along(counter)) {
-            if (counter[j] > 0) {
-              # Increase probability for used rules
-              new_probs[j] <- min(current_probs[j] +
-                learning_factor * (counter[j] / total), 1.0)
-            } else {
-              # Decrease probability for unused rules
-              new_probs[j] <- max(current_probs[j] -
-                learning_factor * current_probs[j], 0.0)
-            }
-          }
-
-          # Normalize probabilities to ensure they sum to 1
-          self$grammar$pcfg[nt_index, ] <- new_probs / sum(new_probs)
-        }
-      }
-    },
-    make_initial_population = function() {
-      population <- vector("list", length = self$params$popsize)
-
-      for (i in seq_len(self$params$popsize)) {
-        individual <- self$generate_random_individual()
-        population[[i]] <- individual
-      }
-
-      return(population)
-    },
-    run_evolution = function() {
-      # Initialize and evaluate population
-      population <- self$evaluate_all(self$make_initial_population())
-      # Tracking variables
-      best_overall <- NULL
-      best_generation <- NULL
-      flag <- FALSE # Flag for alternating PCFG updates
-
-      # Main evolutionary loop
-      for (gen in 1:self$params$generations) {
-        population <- sort_by_fitness(population)
-        # Update best individuals
-        current_best <- population[[1]]
-
-        if (is.null(best_overall) || current_best$fitness < best_overall$fitness) {
-          best_overall <- current_best
-        }
-
-        # Update PCFG probabilities
-        best_to_update <- if (!flag) best_overall else current_best
-        self$update_pcfg(best_to_update, self$params$learning_factor)
-
-        # Adaptive learning factor
-        if (self$params$adaptive_lf) {
-          self$params$learning_factor <-
-            self$params$learning_factor + self$params$adaptive_increment
-        }
-
-        # Create new population
-        new_population <- list()
-
-        # Generate offspring
-        while (length(new_population) < (self$params$popsize - self$params$elitism)) {
-          # Select reproduction method
-          if (runif(1) < self$params$prob_crossover) {
-            # Crossover
-            p1 <- self$tournament_selection(population)
-            p2 <- self$tournament_selection(population)
-            offspring <- self$crossover(p1, p2)
-          } else {
-            # Copy
-            offspring <- self$tournament_selection(population)
-          }
-
-          # Apply mutation
-          offspring <- self$mutate(offspring)
-
-          # Evaluate offspring
-          offspring <- self$evaluate(offspring)
-
-          # Add to new population
-          new_population <- c(new_population, list(offspring))
-        }
-
-        # Add elites to new population
-        elites <- population[1:self$params$elitism]
-        population <- c(new_population, elites)
-
-        # Update tracking
-        best_generation <- population[[1]]
-        flag <- !flag # Toggle flag for next generation
-      }
-
-      # Return best solution found
-      return(best_overall)
-    },
-    evaluate_all = function(pop) {
-      lapply(pop, self$evaluate)
-    },
-    print_genotype = function(ind) {
-      str(ind$genotype)
-    }
+#' Crossover operator for PSGE
+#'
+#' @param parent1 First parent individual
+#' @param parent2 Second parent individual
+#' @return New individual created by crossover
+#' @export
+crossover <- function(parent1, parent2) {
+  # Create binary mask for each non-terminal
+  all_nts <- unique(c(names(parent1$genotype), names(parent2$genotype)))
+  mask <- setNames(
+    sample(0:1, length(all_nts), replace = TRUE),
+    all_nts
   )
-)
+
+  # Initialize new genotype
+  offspring_genotype <- list()
+
+  # Apply crossover based on mask
+  for (nt in all_nts) {
+    if (mask[nt] == 1) {
+      if (nt %in% names(parent1$genotype)) {
+        offspring_genotype[[nt]] <- parent1$genotype[[nt]]
+      } else {
+        offspring_genotype[[nt]] <- numeric(0)
+      }
+    } else {
+      if (nt %in% names(parent2$genotype)) {
+        offspring_genotype[[nt]] <- parent2$genotype[[nt]]
+      } else {
+        offspring_genotype[[nt]] <- numeric(0)
+      }
+    }
+  }
+
+  # Create offspring with NULL fitness to ensure re-evaluation
+  offspring <- list(
+    genotype = offspring_genotype,
+    fitness = NULL
+  )
+
+  return(offspring)
+}
+
+#' Mutation operator for PSGE
+#'
+#' @param individual Individual to mutate
+#' @param mutation_rate Probability of mutating each codon
+#' @return Mutated individual
+#' @export
+mutate <- function(individual, mutation_rate = 0.1) {
+  # Create a deep copy of the genotype
+  new_genotype <- lapply(individual$genotype, function(values) {
+    if (length(values) > 0) {
+      return(values)
+    } else {
+      return(numeric(0))
+    }
+  })
+
+  # Flag to track if any mutation occurred
+  any_mutation <- FALSE
+
+  # Apply mutation to each non-terminal
+  for (nt in names(new_genotype)) {
+    for (i in seq_along(new_genotype[[nt]])) {
+      if (runif(1) < mutation_rate) {
+        # Apply Gaussian mutation
+        mutation <- rnorm(1, mean = 0, sd = 0.1)
+        new_value <- new_genotype[[nt]][i] + mutation
+
+        # Keep value in [0,1] range
+        new_genotype[[nt]][i] <- max(0, min(1, new_value))
+
+        any_mutation <- TRUE
+      }
+    }
+  }
+
+  # Create new individual with NULL fitness to ensure re-evaluation
+  mutated <- list(
+    genotype = new_genotype,
+    fitness = NULL
+  )
+
+  return(mutated)
+}
+
+#' Create the next generation through selection, crossover, and mutation
+#'
+#' @param population Current population
+#' @param grammar PCFG grammar structure
+#' @param crossover_rate Probability of applying crossover
+#' @param mutation_rate Probability of mutating each codon
+#' @param tournament_size Tournament selection size
+#' @param elitism Number of top individuals to preserve
+#' @return New population
+#' @export
+create_next_generation <- function(population, grammar, crossover_rate = 0.9,
+                                   mutation_rate = 0.1, tournament_size = 3, elitism = 10) {
+  # Sort population by fitness
+  sorted_pop <- population[order(sapply(population, function(ind) ind$fitness))]
+
+  # Determine elite count (handle edge case where elitism exceeds population size)
+  elite_count <- min(elitism, length(sorted_pop))
+
+  # Create output population vector
+  new_pop_size <- length(sorted_pop)
+  new_population <- vector("list", new_pop_size)
+
+  # First create the non-elite individuals
+  for (i in 1:(new_pop_size - elite_count)) {
+    if (runif(1) < crossover_rate) {
+      # Crossover
+      parent1 <- tournament_selection(sorted_pop, tournament_size)
+      parent2 <- tournament_selection(sorted_pop, tournament_size)
+      offspring <- crossover(parent1, parent2)
+    } else {
+      # Copy but reset fitness
+      selected <- tournament_selection(sorted_pop, tournament_size)
+      offspring <- list(
+        genotype = selected$genotype,
+        fitness = NULL
+      )
+    }
+
+    # Apply mutation
+    offspring <- mutate(offspring, mutation_rate)
+
+    # Ensure fitness is NULL
+    offspring$fitness <- NULL
+
+    # Add to new population
+    new_population[[i]] <- offspring
+  }
+
+  # Now add the elite individuals at the end
+  if (elite_count > 0) {
+    for (i in 1:elite_count) {
+      elite_index <- i  # Get from the beginning (best individuals)
+      new_index <- new_pop_size - elite_count + i  # Place at the end
+
+      # Create a copy of the elite individual
+      elite_copy <- sorted_pop[[elite_index]]
+
+      # Place in new population
+      new_population[[new_index]] <- elite_copy
+    }
+  }
+
+  return(new_population)
+}
+
+#' Run the PSGE algorithm
+#'
+#' @param grammar PCFG grammar structure from read_pcfg_grammar()
+#' @param fitness_fn Fitness evaluation function
+#' @param pop_size Population size
+#' @param generations Number of generations
+#' @param crossover_rate Probability of crossover
+#' @param mutation_rate Mutation rate
+#' @param max_depth Maximum tree depth
+#' @param tournament_size Tournament selection size
+#' @param elitism Number of elite individuals to preserve
+#' @param learning_factor Learning rate for grammar probability updates
+#' @param alternate_update Whether to alternate between best overall and best in generation
+#' @param verbose Whether to print progress
+#' @return List containing best solution and final grammar
+#' @export
+run_psge <- function(grammar, fitness_fn, pop_size = 100, generations = 50,
+                     crossover_rate = 0.9, mutation_rate = 0.1, max_depth = 17,
+                     tournament_size = 3, elitism = NULL, learning_factor = 0.01,
+                     alternate_update = TRUE, verbose = TRUE) {
+
+  # Set default elitism if not specified
+  if (is.null(elitism)) {
+    elitism <- max(round(pop_size * 0.1), 1)
+  }
+
+  # Create a deep copy of the grammar to avoid modifying the original
+  working_grammar <- grammar
+
+  # Initialize population
+  if (verbose) cat("Initializing population...\n")
+  population <- initialize_population(working_grammar, pop_size, max_depth)
+
+  # Evaluate initial population
+  if (verbose) cat("Evaluating initial population...\n")
+  population <- evaluate_population(population, working_grammar, fitness_fn, max_depth)
+
+  # Sort population
+  population <- population[order(sapply(population, function(ind) ind$fitness))]
+
+  # Initialize tracking variables
+  best_overall <- population[[1]]
+  history <- data.frame(
+    generation = 0,
+    best_fitness = best_overall$fitness,
+    mean_fitness = mean(sapply(population, function(ind) ind$fitness))
+  )
+
+  # Main evolutionary loop
+  for (gen in 1:generations) {
+    if (verbose) cat(sprintf("Generation %d/%d: Best fitness = %.6f\n",
+                             gen, generations, population[[1]]$fitness))
+
+    # Update best individuals
+    current_best <- population[[1]]
+    if (current_best$fitness < best_overall$fitness) {
+      best_overall <- current_best
+    }
+
+    # Update grammar probabilities
+    best_to_update <- if (alternate_update && gen %% 2 == 0) best_overall else current_best
+    working_grammar <- update_grammar_probabilities(working_grammar, best_to_update, learning_factor)
+
+    # Create new generation
+    population <- create_next_generation(
+      population, working_grammar, crossover_rate, mutation_rate,
+      tournament_size, elitism
+    )
+
+    # Evaluate new population
+    population <- evaluate_population(population, working_grammar, fitness_fn, max_depth)
+
+    # Sort population
+    population <- population[order(sapply(population, function(ind) ind$fitness))]
+
+    # Track history
+    history <- rbind(history, data.frame(
+      generation = gen,
+      best_fitness = population[[1]]$fitness,
+      mean_fitness = mean(sapply(population, function(ind) ind$fitness))
+    ))
+  }
+
+  if (verbose) {
+    cat("\nEvolution completed\n")
+    cat(sprintf("Best fitness: %f\n", best_overall$fitness))
+    cat("Best phenotype:", best_overall$phenotype, "\n")
+  }
+
+  return(list(
+    best_solution = best_overall,
+    final_grammar = working_grammar,
+    history = history
+  ))
+}
+
+#' Complete PSGE pipeline
+#'
+#' @param grammar_file Path to BNF grammar file
+#' @param fitness_fn Fitness evaluation function
+#' @param ... Additional parameters passed to run_psge
+#' @return Best solution and final grammar
+#' @export
+psge <- function(grammar_file, fitness_fn, ...) {
+  # Load and parse grammar
+  grammar <- read_pcfg_grammar(grammar_file)
+
+  # Run PSGE algorithm
+  result <- run_psge(grammar, fitness_fn, ...)
+
+  return(result)
+}

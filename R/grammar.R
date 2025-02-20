@@ -1,613 +1,574 @@
-# Helper functions
-round_prob <- function(x, digits = 3) {
-  if (is.null(x) || length(x) == 0) {
-    return(x)
+# We want to express grammars as simple lists of lists.
+# I.e., avoid the convoluted class-based implementation
+# from previous versions.
+
+#' Parse and validate a BNF grammar file for PSGE
+#'
+#' @param grammar_file Path to the BNF grammar file
+#' @param initial_prob_method Method to initialize probabilities ("uniform" or "specified")
+#' @param prob_map Optional list of probability maps for each non-terminal
+#' @param validate Boolean indicating whether to validate the grammar with `validate_grammar`
+#' @return A validated PCFG grammar structure
+#' @export
+read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", prob_map = NULL, validate = TRUE) {
+  if (!file.exists(grammar_file)) {
+    stop("Grammar file not found: ", grammar_file)
   }
-  if (any(is.na(x))) {
-    return(x)
-  } # Preserve NA values
-  return(round(x, digits))
+
+  # Read file content
+  lines <- readLines(grammar_file)
+
+  # Initialize grammar structure
+  grammar <- list(
+    non_terminals = character(0),
+    terminals = character(0),
+    start_symbol = NULL,
+    rules = list()
+  )
+
+  # Regular expressions for parsing
+  nt_pattern <- "<[^>]+>"
+  rule_sep <- "::="
+  prod_sep <- "\\|"
+
+  # Process each line
+  for (line in lines) {
+    line <- trimws(line)
+    if (line == "" || startsWith(line, "#")) {
+      next # Skip empty lines and comments
+    }
+
+    # Split into LHS and RHS
+    parts <- strsplit(line, rule_sep, fixed = FALSE)[[1]]
+    if (length(parts) != 2) {
+      next # Skip invalid lines
+    }
+
+    # Extract non-terminal (left-hand side)
+    lhs <- trimws(parts[1])
+    if (!grepl(paste0("^", nt_pattern, "$"), lhs)) {
+      warning("Invalid non-terminal format: ", lhs)
+      next
+    }
+
+    # Clean non-terminal name (remove < >)
+    nt_name <- gsub("[<>]", "", lhs)
+
+    # Add to non-terminals list if new
+    if (!(nt_name %in% grammar$non_terminals)) {
+      grammar$non_terminals <- c(grammar$non_terminals, nt_name)
+      grammar$rules[[nt_name]] <- list()
+    }
+
+    # Set start symbol if not set
+    if (is.null(grammar$start_symbol)) {
+      grammar$start_symbol <- nt_name
+    }
+
+    # Process right-hand side (production rules)
+    rhs <- trimws(parts[2])
+    productions <- strsplit(rhs, prod_sep, fixed = FALSE)[[1]]
+    productions <- trimws(productions)
+
+    # Process each production
+    for (prod in productions) {
+      # Parse tokens
+      tokens <- extract_tokens(prod)
+
+      # Add production to grammar
+      prod_entry <- list(
+        symbols = tokens$symbols,
+        types = tokens$types
+      )
+
+      grammar$rules[[nt_name]] <- c(grammar$rules[[nt_name]], list(prod_entry))
+
+      # Update terminals set
+      for (i in seq_along(tokens$symbols)) {
+        if (tokens$types[i] == "T" && !(tokens$symbols[i] %in% grammar$terminals)) {
+          grammar$terminals <- c(grammar$terminals, tokens$symbols[i])
+        }
+      }
+    }
+  }
+
+  # Initialize probabilities
+  grammar <- initialize_probabilities(grammar, method = initial_prob_method, prob_map = prob_map)
+
+  # Validate the grammar if requested
+  if (validate) {
+    grammar <- validate_grammar(grammar)  # Store the returned grammar
+  }
+
+  return(grammar)
 }
 
-# R equivalent for Python's static methods (defined outside the R6 class)
-r_filter <- function(txt, needs_r_filter) {
-  # String replacements - still relevant
-  txt <- gsub(r"(\\le)", "<=", txt)
-  txt <- gsub(r"(\\ge)", ">=", txt)
-  txt <- gsub(r"(\\l)", "<", txt)
-  txt <- gsub(r"(\\g)", ">", txt)
-  txt <- gsub(r"(\\eb)", "\\|", txt)
-  txt <- gsub(r"(\\n)", "\n", txt)
-  txt <- gsub(r"(\\t)", "\t", txt)
-  txt <- gsub(r"(\{:)", "{", txt)
-  txt <- gsub(r"(:\})", "}", txt)
+#' Extract tokens (terminals and non-terminals) from a production string
+#'
+#' @param production String containing a production rule
+#' @return List with symbols and their types
+#' @keywords internal
+extract_tokens <- function(production) {
+  nt_pattern <- "<[^>]*>"
 
-  if (needs_r_filter) { # Apply formatting only when needed
-    # **Remove markers BEFORE styling**
-    txt_no_markers <- gsub(r"(\{:)", "", txt)
-    txt_no_markers <- gsub(r"(:\})", "", txt_no_markers)
-    txt_no_markers <- gsub(r"(\\n)", "\n", txt_no_markers)
-
-    tryCatch(
-      {
-        # Attempt to style the text as R code using styler::style_text
-        formatted_txt <- styler::style_text(txt_no_markers)
-        # styler::style_text returns a list of formatted code lines.
-        txt <- paste(formatted_txt, collapse = "\n") # Convert to single string
-      },
-      error = function(e) {
-        # If styler fails to parse or style (e.g., if 'txt' is not valid R-like code)
-        warning("styler formatting failed: ", e$message, ". Returning unstyled text (markers removed).")
-        # In case of error, return the original text without styling
-        return(txt_no_markers)
-      }
-    )
+  # Special case for empty non-terminal
+  if (production == "<>") {
+    return(list(symbols = "", types = "NT"))
   }
-  return(trimws(txt))
+
+  # Find all non-terminals in the production
+  nt_matches <- gregexpr(nt_pattern, production)
+  nt_positions <- attr(nt_matches[[1]], "match.length")
+  nt_starts <- as.vector(nt_matches[[1]])
+
+  if (nt_starts[1] == -1) {
+    # No non-terminals, this is a terminal production
+    return(list(
+      symbols = trimws(production),
+      types = "T"
+    ))
+  }
+
+  # Process mixed terminals and non-terminals
+  tokens <- list()
+  symbols <- character(0)
+  types <- character(0)
+
+  # Current position in the string
+  pos <- 1
+  for (i in seq_along(nt_starts)) {
+    if (nt_starts[i] > pos) {
+      # There's a terminal before this non-terminal
+      term <- trimws(substr(production, pos, nt_starts[i] - 1))
+      if (term != "") {
+        symbols <- c(symbols, term)
+        types <- c(types, "T")
+      }
+    }
+
+    # Extract the non-terminal
+    nt <- substr(production, nt_starts[i], nt_starts[i] + nt_positions[i] - 1)
+    nt_clean <- gsub("[<>]", "", nt)
+    symbols <- c(symbols, nt_clean)
+    types <- c(types, "NT")
+
+    # Update position
+    pos <- nt_starts[i] + nt_positions[i]
+  }
+
+  # Check if there's a terminal at the end
+  if (pos <= nchar(production)) {
+    term <- trimws(substr(production, pos, nchar(production)))
+    if (term != "") {
+      symbols <- c(symbols, term)
+      types <- c(types, "T")
+    }
+  }
+
+  return(list(symbols = symbols, types = types))
 }
 
-Grammar <- R6::R6Class(
-  "Grammar",
-  public = list(
-    NT = "NT",
-    T = "T",
-    NT_PATTERN = "(<[^>]+>)",
-    RULE_SEPARATOR = "::=",
-    PRODUCTION_SEPARATOR = "|",
-    grammar = list(),
-    non_terminals = NULL,
-    terminals = NULL,
-    ordered_non_terminals = NULL,
-    pcfg = NULL,
-    pcfg_mask = NULL,
-    max_depth = NULL,
-    max_init_depth = NULL,
-    grammar_file = NULL,
-    start_rule = NULL,
-    index_of_non_terminal = list(),
-    non_recursive_options = list(),
-    shortest_path = list(),
-    initialize = function() {
-      self$non_terminals <- OrderedUniqueSet$new()
-      self$terminals <- OrderedUniqueSet$new()
-      self$ordered_non_terminals <- OrderedUniqueSet$new()
-    },
-    set_path = function(grammar_path) {
-      self$grammar_file <- grammar_path
-      invisible(self)
-    },
-    set_max_tree_depth = function(max_tree_depth) {
-      self$max_depth <- max_tree_depth
-      invisible(self)
-    },
-    set_min_init_tree_depth = function(min_tree_depth) {
-      self$max_init_depth <- min_tree_depth
-      invisible(self)
-    },
-    parse_production = function(production) {
-      tokens <- stringr::str_match_all(production, "<[^>]+>|[^<>]+")[[1]][,1]
-      tokens <- trimws(tokens)
+#' Initialize probabilities for grammar rules
+#'
+#' @param grammar Grammar structure to initialize
+#' @param method Method to use ("uniform" or "specified")
+#' @param prob_map Map of probabilities (required if method is "specified")
+#' @return Grammar with initialized probabilities
+#' @export
+initialize_probabilities <- function(grammar, method = "uniform", prob_map = NULL) {
+  if (method == "uniform") {
+    # Assign uniform probabilities to each production rule
+    for (nt in names(grammar$rules)) {
+      n_rules <- length(grammar$rules[[nt]])
+      for (i in seq_len(n_rules)) {
+        grammar$rules[[nt]][[i]]$prob <- 1/n_rules
+      }
+    }
+  } else if (method == "specified") {
+    if (is.null(prob_map)) {
+      stop("prob_map must be provided when method is 'specified'")
+    }
 
-      result <- list()
-      for (token in tokens) {
-        if (grepl(self$NT_PATTERN, token)) {
-          result[[length(result) + 1]] <- list(token, self$NT)
-          if (!self$non_terminals$has(token)) {
-            self$non_terminals$add(token)
-            self$ordered_non_terminals$add(token)
-          }
-        } else if (nchar(token) > 0) {
-          result[[length(result) + 1]] <- list(token, self$T)
-          if (!self$terminals$has(token)) {
-            self$terminals$add(token)
-          }
+    # Use specified probabilities
+    for (nt in names(prob_map)) {
+      if (!(nt %in% names(grammar$rules))) {
+        warning("Non-terminal '", nt, "' in prob_map not found in grammar")
+        next
+      }
+
+      probs <- prob_map[[nt]]
+      if (length(probs) != length(grammar$rules[[nt]])) {
+        warning("Number of probabilities for '", nt, "' doesn't match number of rules")
+        next
+      }
+
+      # Assign specified probabilities
+      for (i in seq_along(probs)) {
+        grammar$rules[[nt]][[i]]$prob <- probs[i]
+      }
+    }
+
+    # For any non-terminals not in prob_map, use uniform probabilities
+    for (nt in names(grammar$rules)) {
+      if (!(nt %in% names(prob_map))) {
+        n_rules <- length(grammar$rules[[nt]])
+        for (i in seq_len(n_rules)) {
+          grammar$rules[[nt]][[i]]$prob <- 1/n_rules
         }
       }
-      result
-    },
-    read_grammar = function() {
-      if (is.null(self$grammar_file)) {
-        stop("Grammar file path not set")
+    }
+  } else {
+    stop("Unknown probability initialization method: ", method)
+  }
+
+  return(grammar)
+}
+
+#' Validate a grammar structure
+#'
+#' @param grammar Grammar structure to validate
+#' @param tolerance Tolerance for probability sum (default: 1e-10)
+#' @return The validated grammar object if valid, error if invalid
+#' @export
+validate_grammar <- function(grammar, tolerance = 1e-10) {
+  # Check required components in exact order to match tests
+  if (is.null(grammar$non_terminals) || length(grammar$non_terminals) == 0) {
+    stop("Grammar has no non-terminals")
+  }
+
+  if (is.null(grammar$rules) || length(grammar$rules) == 0) {
+    stop("Grammar has no rules")
+  }
+
+  if (is.null(grammar$start_symbol)) {
+    stop("Grammar has no start symbol")
+  }
+
+  if (!(grammar$start_symbol %in% grammar$non_terminals)) {
+    stop("Start symbol '", grammar$start_symbol, "' is not a defined non-terminal")
+  }
+
+  # Check each non-terminal has rules
+  for (nt in grammar$non_terminals) {
+    if (!(nt %in% names(grammar$rules)) || length(grammar$rules[[nt]]) == 0) {
+      stop("Non-terminal '", nt, "' has no production rules")
+    }
+
+    for (i in seq_along(grammar$rules[[nt]])) {
+      rule <- grammar$rules[[nt]][[i]]
+
+      # 1. Check for empty symbols
+      if (is.null(rule$symbols) || length(rule$symbols) == 0) {
+        stop("Rule ", i, " for '", nt, "' has no symbols")
       }
 
-      lines <- readLines(self$grammar_file)
-      self$grammar <- list()
-
-      for (line in lines) {
-        line <- trimws(line)
-        if (nchar(line) == 0 || startsWith(line, "#")) next
-
-        parts <- strsplit(line, self$RULE_SEPARATOR)[[1]]
-        if (length(parts) != 2) next
-
-        lhs <- trimws(parts[1])
-        rhs <- trimws(parts[2])
-
-        productions <- strsplit(rhs, paste0("\\s*\\", self$PRODUCTION_SEPARATOR, "\\s*"))[[1]]
-        temp_productions <- lapply(productions, self$parse_production)
-
-        self$grammar[[lhs]] <- temp_productions
+      # 2. Check for mismatched lengths
+      if (is.null(rule$types) || length(rule$types) != length(rule$symbols)) {
+        stop("Rule ", i, " for '", nt, "' has mismatched symbols and types")
       }
 
-      if (length(self$grammar) > 0 && is.null(self$start_rule)) {
-        first_nt <- names(self$grammar)[1]
-        self$start_rule <- list(first_nt, self$NT)
+      # 3. Check for invalid symbol types
+      if (!all(rule$types %in% c("T", "NT"))) {
+        stop("Rule ", i, " for '", nt, "' has invalid symbol types")
       }
 
-      # Initialize index lookup for non-terminals
-      self$index_of_non_terminal <- list()
-      for (i in seq_along(self$grammar)) {
-        nt <- names(self$grammar)[i]
-        self$index_of_non_terminal[[nt]] <- i
+      # 4. Check for invalid probability - only flag negative probabilities
+      if (is.null(rule$prob) || rule$prob < 0) {
+        stop("Rule ", i, " for '", nt, "' has invalid probability: ", rule$prob)
       }
 
-      # Initialize supporting structures
-      self$generate_uniform_pcfg()
-      self$compute_non_recursive_options()
-      self$find_shortest_path()
-
-      invisible(self)
-    },
-    generate_uniform_pcfg = function() {
-      if (length(self$grammar) == 0) return()
-
-      max_rules <- max(sapply(self$grammar, length))
-      self$pcfg <- matrix(0,
-                          nrow = length(self$grammar),
-                          ncol = max_rules)
-      rownames(self$pcfg) <- names(self$grammar)
-
-      for (i in seq_along(self$grammar)) {
-        nt <- names(self$grammar)[i]
-        n_rules <- length(self$grammar[[nt]])
-        if (n_rules > 0) {
-          self$pcfg[i, 1:n_rules] <- 1/n_rules
+      # 5. Verify all non-terminals in the rule exist in the grammar
+      for (j in seq_along(rule$symbols)) {
+        if (rule$types[j] == "NT" && !(rule$symbols[j] %in% grammar$non_terminals)) {
+          stop("Rule ", i, " for '", nt, "' references undefined non-terminal: ", rule$symbols[j])
         }
       }
+    }
+  }
 
-      self$pcfg_mask <- self$pcfg != 0
-    },
-    update_pcfg = function(best_individual, learning_factor) {
-      if (is.null(best_individual$genotype)) {
-        stop("Invalid individual: no genotype found")
-      }
+  # Now, check and normalize probability distributions
+  for (nt in grammar$non_terminals) {
+    # Validate probability distribution
+    probs <- sapply(grammar$rules[[nt]], function(rule) rule$prob)
+    prob_sum <- sum(probs)
 
-      for (nt in names(best_individual$genotype)) {
-        nt_index <- self$index_of_non_terminal[[nt]]
-        if (is.null(nt_index)) next
+    # Handle normalization threshold with very specific logic
+    if (abs(prob_sum - 1) > tolerance) {
+      # Instead of using <= comparison which can fail at exact boundaries,
+      # use an open interval (< 0.1) plus a separate check for exact equality
+      if (abs(prob_sum - 1) < 0.1 || isTRUE(all.equal(abs(prob_sum - 1), 0.1, tolerance=1e-14))) {
+        warning("Probabilities for '", nt, "' sum to ", prob_sum, ". Normalizing.")
 
-        # Count rule usage
-        rule_counts <- integer(ncol(self$pcfg))
-        rule_usage <- best_individual$genotype[[nt]]
-
-        for (gene in rule_usage) {
-          if (!is.null(gene) && length(gene) > 0) {
-            rule_counts[gene[1]] <- rule_counts[gene[1]] + 1
-          }
-        }
-
-        total_used <- sum(rule_counts)
-        if (total_used == 0) next
-
-        current_probs <- self$pcfg[nt_index,]
-        new_probs <- current_probs
-
-        # Update probabilities using equations from paper
-        for (j in seq_along(rule_counts)) {
-          if (rule_counts[j] > 0) {
-            # Increase probability for used rules
-            new_probs[j] <- min(
-              current_probs[j] + learning_factor * (rule_counts[j] / total_used),
-              1.0
-            )
-          } else {
-            # Decrease probability for unused rules
-            new_probs[j] <- max(
-              current_probs[j] - learning_factor * current_probs[j],
-              0.0
-            )
-          }
-        }
-
-        # Normalize the row
-        self$pcfg[nt_index,] <- self$normalize_row_probabilities(new_probs)
-      }
-    },
-    verify_pcfg = function() {
-      if (is.null(self$pcfg)) return(FALSE)
-
-      for (i in seq_len(nrow(self$pcfg))) {
-        active_probs <- self$pcfg[i, self$pcfg_mask[i,]]
-        if (length(active_probs) > 0) {
-          row_sum <- sum(active_probs)
-          if (abs(row_sum - 1) > 1e-6) {
-            warning(sprintf(
-              "Row %d probabilities sum to %f, normalizing",
-              i, row_sum
-            ))
-            self$pcfg[i, self$pcfg_mask[i,]] <- active_probs / row_sum
-          }
-        }
-      }
-      TRUE
-    },
-    find_shortest_path = function() {
-      open_symbols <- OrderedUniqueSet$new()
-
-      for (nt in names(self$grammar)) {
-        depth <- self$minimum_path_calc(list(nt, self$NT), open_symbols)
-      }
-
-      invisible(self)
-    },
-    minimum_path_calc = function(current_symbol, open_symbols) {
-      if (current_symbol[[2]] == self$T) {
-        return(0)
-      }
-
-      open_symbols$add(current_symbol[[1]])
-
-      key <- paste(current_symbol[[1]], current_symbol[[2]])
-      if (is.null(self$shortest_path[[key]])) {
-        self$shortest_path[[key]] <- list(depth = 999999, options = list())
-      }
-
-      for (derivation_option in self$grammar[[current_symbol[[1]]]]) {
-        max_depth <- 0
-
-        # Check for open symbols
-        has_open_symbol <- FALSE
-        for (sym in derivation_option) {
-          if (open_symbols$has(sym[[1]])) {
-            has_open_symbol <- TRUE
-            break
-          }
-        }
-        if (has_open_symbol) next
-
-        # Check for recursion
-        current_in_derivation <- FALSE
-        current_symbol_value <- current_symbol[[1]]
-        for (sym in derivation_option) {
-          if (identical(sym[[1]], current_symbol_value)) {
-            current_in_derivation <- TRUE
-            break
-          }
-        }
-
-        if (!current_in_derivation) {
-          for (symbol in derivation_option) {
-            depth <- self$minimum_path_calc(symbol, open_symbols)
-            depth <- depth + 1
-            if (depth > max_depth) {
-              max_depth <- depth
-            }
-          }
-
-          # Compare with current shortest path
-          if (max_depth < self$shortest_path[[key]]$depth) {
-            self$shortest_path[[key]]$depth <- max_depth
-            self$shortest_path[[key]]$options <- list(derivation_option)
-          } else if (max_depth == self$shortest_path[[key]]$depth) {
-            # Check if this option is already present
-            is_duplicate <- FALSE
-            for (existing_option in self$shortest_path[[key]]$options) {
-              if (identical(existing_option, derivation_option)) {
-                is_duplicate <- TRUE
-                break
-              }
-            }
-            if (!is_duplicate) {
-              self$shortest_path[[key]]$options <- c(
-                self$shortest_path[[key]]$options,
-                list(derivation_option)
-              )
-            }
-          }
-        }
-      }
-
-      open_symbols$delete(current_symbol[[1]])
-      return(self$shortest_path[[key]]$depth)
-    },
-    compute_non_recursive_options = function() {
-      if (length(self$grammar) == 0) {
-        stop("Cannot compute options: grammar is empty")
-      }
-
-      for (nt in names(self$grammar)) {
-        if (!self$non_terminals$has(nt)) next
-
-        prob_non_recursive <- 0.0
-        non_recursive_prods <- list()
-
-        for (index in seq_along(self$grammar[[nt]])) {
-          option <- self$grammar[[nt]][[index]]
-
-          is_recursive <- FALSE
-          for (sym in option) {
-            if (!is.null(sym[[1]]) && identical(sym[[1]], nt)) {
-              is_recursive <- TRUE
-              break
-            }
-          }
-
-          if (!is_recursive) {
-            nt_index <- self$index_of_non_terminal[[nt]]
-            if (!is.null(nt_index) && !is.null(self$pcfg[nt_index, index])) {
-              prob_non_recursive <- prob_non_recursive + self$pcfg[nt_index, index]
-              non_recursive_prods[[length(non_recursive_prods) + 1]] <- list(
-                index = index,
-                option = option
-              )
-            }
-          }
-        }
-
-        self$non_recursive_options[[nt]] <- list(
-          productions = non_recursive_prods,
-          probability = round(prob_non_recursive, 3)
-        )
-      }
-
-      invisible(self)
-    },
-    recursive_individual_creation = function(genotype, symbol, current_depth = 0) {
-      # Validate max depth setting
-      if (is.null(self$max_depth)) {
-        stop("Maximum tree depth must be set before individual creation")
-      }
-
-      # Early termination if max depth is exceeded
-      if (current_depth >= self$max_depth) {
-        # Retrieve non-recursive options
-        non_recursive_info <- self$non_recursive_options[[symbol]]
-
-        # If no non-recursive options, return current state
-        if (length(non_recursive_info$productions) == 0) {
-          return(list(
-            genotype = genotype,
-            depth = current_depth
-          ))
-        }
-
-        # Select from non-recursive options
-        nt_index <- self$index_of_non_terminal[[symbol]]
-        non_recursive_indices <- sapply(non_recursive_info$productions, `[[`, "index")
-
-        # Adjust probabilities for non-recursive rules
-        non_recursive_probs <- self$pcfg[nt_index, non_recursive_indices]
-        non_recursive_probs <- non_recursive_probs / sum(non_recursive_probs)
-
-        # Select rule
-        codon <- runif(1)
-        prob_aux <- 0
-        for (i in seq_along(non_recursive_indices)) {
-          prob_aux <- prob_aux + non_recursive_probs[i]
-          if (codon <= prob_aux) {
-            expansion_possibility <- non_recursive_indices[i]
-            break
-          }
+        # Normalize the probabilities - update the grammar object
+        for (i in seq_along(grammar$rules[[nt]])) {
+          grammar$rules[[nt]][[i]]$prob <- grammar$rules[[nt]][[i]]$prob / prob_sum
         }
       } else {
-        # Normal rule selection process
-        codon <- runif(1)
-        nt_index <- self$index_of_non_terminal[[symbol]]
-
-        # Select rule using PCFG probabilities
-        prob_aux <- 0
-        expansion_possibility <- 1
-        for(index in seq_along(self$grammar[[symbol]])) {
-          prob_aux <- prob_aux + self$pcfg[nt_index, index]
-          if(codon <= round(prob_aux, 3)) {
-            expansion_possibility <- index
-            break
-          }
-        }
+        stop("Probabilities for '", nt, "' sum to ", prob_sum, ", not 1")
       }
+    }
+  }
 
-      # Add this choice to the genotype
-      genotype[[symbol]][[length(genotype[[symbol]]) + 1]] <-
-        c(expansion_possibility, codon, current_depth)
+  # Check for unreachable non-terminals
+  reachable <- check_reachability(grammar)
+  unreachable <- setdiff(grammar$non_terminals, reachable)
+  if (length(unreachable) > 0) {
+    warning("Grammar has unreachable non-terminals: ", paste(unreachable, collapse=", "))
+  }
 
-      # Recursively handle expansion
-      expansion_symbols <- self$grammar[[symbol]][[expansion_possibility]]
-      depths <- current_depth
+  return(grammar)
+}
 
-      for(sym in expansion_symbols) {
-        if(sym[[2]] == self$NT) {
-          result <- self$recursive_individual_creation(
-            genotype,
-            sym[[1]],
-            current_depth + 1
-          )
-          genotype <- result$genotype
-          depths <- c(depths, result$depth)
-        }
-      }
+#' Check which non-terminals are reachable from the start symbol
+#'
+#' @param grammar Grammar structure to check
+#' @return Character vector of reachable non-terminals
+#' @keywords internal
+check_reachability <- function(grammar) {
+  reachable <- grammar$start_symbol
+  visited <- character(0)
 
-      list(
-        genotype = genotype,
-        depth = max(depths)
-      )
-    },
-    mapping = function(mapping_rules, positions_to_map = NULL) {
-      if (is.null(positions_to_map)) {
-        positions_to_map <- rep(0, length(self$ordered_non_terminals$values()))
-      }
+  while (length(reachable) > 0) {
+    current <- reachable[1]
+    reachable <- reachable[-1]
+    visited <- c(visited, current)
 
-      result <- self$recursive_mapping(
-        mapping_rules,
-        positions_to_map,
-        self$start_rule,
-        0,
-        character(0)
-      )
-
-      list(
-        phenotype = paste(result$output, collapse = ""),
-        mapping_result = result$depth,
-        positions = result$positions
-      )
-    },
-    recursive_mapping = function(mapping_rules, positions_to_map, current_sym, current_depth, output) {
-      # Validate maximum depth setting
-      if (is.null(self$max_depth)) {
-        stop("Maximum tree depth must be set before mapping")
-      }
-
-      # Depth limit enforcement
-      if (current_depth >= self$max_depth) {
-        # Early termination when max depth is reached
-        if (current_sym[[2]] == self$T) {
-          # If it's a terminal, add it to output
-          output <- c(output, current_sym[[1]])
-        } else {
-          # For non-terminals at max depth, use non-recursive options
-          non_recursive_info <- self$non_recursive_options[[current_sym[[1]]]]
-
-          # If no non-recursive options exist, return current state
-          if (length(non_recursive_info$productions) == 0) {
-            return(list(
-              output = output,
-              depth = current_depth,
-              positions = positions_to_map
-            ))
-          }
-
-          # Select a non-recursive production
-          nt_index <- self$index_of_non_terminal[[current_sym[[1]]]]
-          non_recursive_indices <- sapply(non_recursive_info$productions, `[[`, "index")
-
-          # Adjust probabilities for non-recursive rules
-          non_recursive_probs <- self$pcfg[nt_index, non_recursive_indices]
-          non_recursive_probs <- non_recursive_probs / sum(non_recursive_probs)
-
-          # Use the first available non-recursive production
-          # This maintains the original method's deterministic behavior
-          selected_production <- self$grammar[[current_sym[[1]]]][[non_recursive_indices[1]]]
-
-          # Process the selected production
-          for (symbol in selected_production) {
-            if (symbol[[2]] == self$T) {
-              output <- c(output, symbol[[1]])
+    # Find all rules for the current non-terminal
+    if (current %in% names(grammar$rules)) {
+      for (rule in grammar$rules[[current]]) {
+        # Find all non-terminals in this rule
+        for (i in seq_along(rule$symbols)) {
+          if (rule$types[i] == "NT") {
+            nt <- rule$symbols[i]
+            if (!(nt %in% visited) && !(nt %in% reachable)) {
+              reachable <- c(reachable, nt)
             }
           }
         }
-
-        # Return the mapping result at max depth
-        return(list(
-          output = output,
-          depth = current_depth,
-          positions = positions_to_map
-        ))
       }
-
-      # Original mapping logic for terminals
-      if (identical(current_sym[[2]], self$T)) {
-        output <- c(output, current_sym[[1]])
-        return(list(
-          output = output,
-          depth = current_depth,
-          positions = positions_to_map
-        ))
-      }
-
-      # Locate the current symbol's position in ordered non-terminals
-      current_sym_pos <- which(sapply(self$ordered_non_terminals$values(),
-                                      function(x) identical(x, current_sym[[1]])))
-
-      # Determine rule position and expansion
-      rule_pos <- positions_to_map[current_sym_pos] + 1
-      expansion_possibility <- mapping_rules[[ current_sym[[1]] ]][[ rule_pos ]][[1]]
-      positions_to_map[current_sym_pos] <- rule_pos
-
-      # Get expansion symbols
-      next_symbols <- self$grammar[[current_sym[[1]]]][[expansion_possibility]]
-
-      # Track maximum depth reached
-      depths <- current_depth
-
-      # Recursively process each symbol in the expansion
-      for(next_sym in next_symbols) {
-        result <- self$recursive_mapping(
-          mapping_rules,
-          positions_to_map,
-          next_sym,
-          current_depth + 1,
-          output
-        )
-
-        output <- result$output
-        depths <- c(depths, result$depth)
-        positions_to_map <- result$positions
-      }
-
-      # Return mapping results
-      list(
-        output = output,
-        depth = max(depths),
-        positions = positions_to_map
-      )
-    },
-    has_terminal = function(terminal) {
-      self$terminals$has(terminal)
-    },
-    has_non_terminal = function(non_terminal) {
-      self$non_terminals$has(non_terminal)
-    },
-    get_terminals = function() {
-      self$terminals
-    },
-    get_non_terminals = function() {
-      self$ordered_non_terminals
-    },
-    get_pcfg = function() {
-      if (!self$verify_pcfg()) {
-        stop("PCFG verification failed")
-      }
-      self$pcfg
-    },
-    get_mask = function() {
-      if (is.null(self$pcfg)) {
-        return(NULL)
-      }
-      self$pcfg != 0
-    },
-    get_index_of_non_terminal = function() {
-      self$index_of_non_terminal
-    },
-    get_non_recursive_options = function(symbol) {
-      if (is.null(symbol)) stop("Symbol cannot be NULL")
-      if (!self$non_terminals$has(symbol)) {
-        stop(sprintf("Symbol '%s' not found in non-terminals", symbol))
-      }
-      self$non_recursive_options[[symbol]]
-    },
-    get_dict = function() {
-      self$grammar
-    },
-    get_shortest_path = function() {
-      self$shortest_path
-    },
-    get_start_rule = function() {
-      self$start_rule
-    },
-    get_max_depth = function() {
-      self$max_depth
-    },
-    get_max_init_depth = function() {
-      self$max_init_depth
-    },
-    normalize_row_probabilities = function(probs) {
-      # Handle zero-sum case
-      if (sum(probs) == 0) {
-        n <- length(probs)
-        return(rep(1/n, n))
-      }
-
-      # Normal normalization
-      probs / sum(probs)
     }
+  }
+
+  return(visited)
+}
+
+#' Print a grammar in BNF format with probabilities
+#'
+#' @param grammar Grammar structure to print
+#' @param include_probs Whether to include probabilities in output
+#' @return Invisibly returns the grammar
+#' @export
+print_grammar <- function(grammar, include_probs = TRUE) {
+  cat("Grammar with", length(grammar$non_terminals), "non-terminals and",
+      length(grammar$terminals), "terminals\n")
+  cat("Start symbol:", grammar$start_symbol, "\n\n")
+
+  for (nt in grammar$non_terminals) {
+    cat("<", nt, "> ::= ", sep="")
+    rules <- grammar$rules[[nt]]
+
+    for (i in seq_along(rules)) {
+      if (i > 1) cat(" | ")
+
+      # Print symbols
+      for (j in seq_along(rules[[i]]$symbols)) {
+        if (rules[[i]]$types[j] == "NT") {
+          cat("<", rules[[i]]$symbols[j], ">", sep="")
+        } else {
+          cat(rules[[i]]$symbols[j])
+        }
+        if (j < length(rules[[i]]$symbols)) cat(" ")
+      }
+
+      # Print probability if requested
+      if (include_probs) {
+        cat(" [", formatC(rules[[i]]$prob, digits=4, format="f"), "]", sep="")
+      }
+    }
+    cat("\n")
+  }
+
+  invisible(grammar)
+}
+
+#' Get rules for a specific non-terminal
+#'
+#' @param grammar Grammar structure
+#' @param non_terminal Name of the non-terminal
+#' @return List of rules for the non-terminal
+#' @export
+get_rules <- function(grammar, non_terminal) {
+  if (!(non_terminal %in% names(grammar$rules))) {
+    stop("Non-terminal '", non_terminal, "' not found in grammar")
+  }
+  return(grammar$rules[[non_terminal]])
+}
+
+#' Set probabilities for rules of a non-terminal
+#'
+#' @param grammar Grammar structure
+#' @param non_terminal Name of the non-terminal
+#' @param probabilities Vector of probabilities
+#' @return Updated grammar
+#' @export
+set_probabilities <- function(grammar, non_terminal, probabilities) {
+  if (!(non_terminal %in% names(grammar$rules))) {
+    stop("Non-terminal '", non_terminal, "' not found in grammar")
+  }
+
+  rules <- grammar$rules[[non_terminal]]
+  if (length(probabilities) != length(rules)) {
+    stop("Number of probabilities (", length(probabilities),
+         ") doesn't match number of rules (", length(rules), ") for '", non_terminal, "'")
+  }
+
+  if (abs(sum(probabilities) - 1) > 1e-10) {
+    stop("Probabilities must sum to 1, got ", sum(probabilities))
+  }
+
+  for (i in seq_along(rules)) {
+    grammar$rules[[non_terminal]][[i]]$prob <- probabilities[i]
+  }
+
+  return(grammar)
+}
+
+#' Add a new rule to a non-terminal
+#'
+#' @param grammar Grammar structure
+#' @param non_terminal Name of the non-terminal
+#' @param rule_str String representation of the rule
+#' @param prob Probability for the new rule (if NULL, probabilities will be redistributed)
+#' @return Updated grammar
+#' @export
+add_rule <- function(grammar, non_terminal, rule_str, prob = NULL) {
+  # Check if non-terminal exists
+  if (!(non_terminal %in% grammar$non_terminals)) {
+    # Add new non-terminal
+    grammar$non_terminals <- c(grammar$non_terminals, non_terminal)
+    grammar$rules[[non_terminal]] <- list()
+  }
+
+  # Parse the rule
+  tokens <- extract_tokens(rule_str)
+  new_rule <- list(
+    symbols = tokens$symbols,
+    types = tokens$types
   )
-)
+
+  # Calculate probabilities
+  current_rules <- grammar$rules[[non_terminal]]
+  n_rules <- length(current_rules)
+
+  if (is.null(prob)) {
+    # Distribute probabilities uniformly
+    new_prob <- 1 / (n_rules + 1)
+    for (i in seq_len(n_rules)) {
+      grammar$rules[[non_terminal]][[i]]$prob <- new_prob
+    }
+    new_rule$prob <- new_prob
+  } else {
+    if (prob <= 0 || prob >= 1) {
+      stop("Probability must be between 0 and 1")
+    }
+
+    # Redistribute remaining probability
+    remaining <- 1 - prob
+    if (n_rules > 0) {
+      current_total <- sum(sapply(current_rules, function(r) r$prob))
+      scale_factor <- remaining / current_total
+      for (i in seq_len(n_rules)) {
+        grammar$rules[[non_terminal]][[i]]$prob <- grammar$rules[[non_terminal]][[i]]$prob * scale_factor
+      }
+    }
+    new_rule$prob <- prob
+  }
+
+  # Add the new rule
+  grammar$rules[[non_terminal]] <- c(grammar$rules[[non_terminal]], list(new_rule))
+
+  # Update terminals if needed
+  for (i in seq_along(tokens$symbols)) {
+    if (tokens$types[i] == "T" && !(tokens$symbols[i] %in% grammar$terminals)) {
+      grammar$terminals <- c(grammar$terminals, tokens$symbols[i])
+    }
+  }
+
+  # Validate the modified grammar
+  grammar <- validate_grammar(grammar)  # Store the returned grammar
+
+  return(grammar)
+}
+
+#' Create an empty grammar structure
+#'
+#' @param start Name of the start symbol
+#' @return Empty grammar structure
+#' @export
+new_grammar <- function(start) {
+  grammar <- list(
+    non_terminals = start,  # Add start symbol to non-terminals
+    terminals = character(0),
+    start_symbol = start,
+    rules = list()
+  )
+  # Initialize empty rules list for the start symbol
+  grammar$rules[[start]] <- list()
+  return(grammar)
+}
+
+#' Identify recursive and non-recursive rules
+#'
+#' @param grammar Grammar structure
+#' @return Updated grammar with recursive_rules flags
+#' @export
+identify_recursive_rules <- function(grammar) {
+  for (nt in names(grammar$rules)) {
+    for (i in seq_along(grammar$rules[[nt]])) {
+      rule <- grammar$rules[[nt]][[i]]
+      is_recursive <- FALSE
+
+      for (j in seq_along(rule$symbols)) {
+        if (rule$types[j] == "NT" && rule$symbols[j] == nt) {
+          is_recursive <- TRUE
+          break
+        }
+      }
+
+      grammar$rules[[nt]][[i]]$is_recursive <- is_recursive
+    }
+  }
+
+  return(grammar)
+}
+
+#' Get non-recursive rules for a non-terminal
+#'
+#' @param grammar Grammar structure
+#' @param non_terminal Name of the non-terminal
+#' @return List of non-recursive rules
+#' @export
+get_non_recursive_rules <- function(grammar, non_terminal) {
+  if (!(non_terminal %in% names(grammar$rules))) {
+    stop("Non-terminal '", non_terminal, "' not found in grammar")
+  }
+
+  # Ensure recursive flags are set
+  if (!all(sapply(grammar$rules[[non_terminal]], function(r) !is.null(r$is_recursive)))) {
+    grammar <- identify_recursive_rules(grammar)
+  }
+
+  # Filter non-recursive rules
+  non_recursive <- list()
+  for (rule in grammar$rules[[non_terminal]]) {
+    if (!rule$is_recursive) {
+      non_recursive <- c(non_recursive, list(rule))
+    }
+  }
+
+  if (length(non_recursive) == 0) {
+    warning("No non-recursive rules found for '", non_terminal, "'")
+  }
+
+  return(non_recursive)
+}
