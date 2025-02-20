@@ -16,6 +16,8 @@ run_psge(
   elitism = NULL,
   learning_factor = 0.01,
   alternate_update = TRUE,
+  force_perturbation = FALSE,
+  perturbation_factor = 0.1,
   verbose = TRUE
 )
 }
@@ -41,6 +43,10 @@ run_psge(
 \item{learning_factor}{Learning rate for grammar probability updates}
 
 \item{alternate_update}{Whether to alternate between best overall and best in generation}
+
+\item{force_perturbation}{Whether to force perturbation of all probability distributions (default: FALSE)}
+
+\item{perturbation_factor}{Amount of perturbation when forcing changes (default: 0.1)}
 
 \item{verbose}{Whether to print progress}
 }

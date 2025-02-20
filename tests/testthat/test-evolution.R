@@ -74,7 +74,7 @@ test_that("update_grammar_probabilities adjusts probabilities correctly", {
   )
 
   # Update with low learning factor
-  updated_grammar <- update_grammar_probabilities(grammar, individual, learning_factor = 0.05)
+  updated_grammar <- update_grammar_probabilities(grammar, individual, learning_factor = 0.05, force_perturbation = TRUE)
 
   # Validate that probabilities were adjusted
   for (nt in names(grammar$rules)) {
@@ -90,11 +90,11 @@ test_that("update_grammar_probabilities adjusts probabilities correctly", {
 
   # Test with empty genotype
   empty_individual <- list(genotype = list())
-  expect_error(update_grammar_probabilities(grammar, empty_individual))
+  expect_error(update_grammar_probabilities(grammar, empty_individual, force_perturbation = TRUE))
 
   # Test with NULL genotype
   null_individual <- list()
-  expect_error(update_grammar_probabilities(grammar, null_individual))
+  expect_error(update_grammar_probabilities(grammar, null_individual, force_perturbation = TRUE))
 })
 
 test_that("initialize_population creates valid individuals", {

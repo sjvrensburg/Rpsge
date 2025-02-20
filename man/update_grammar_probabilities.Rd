@@ -4,7 +4,13 @@
 \alias{update_grammar_probabilities}
 \title{Update grammar probabilities based on a successful individual}
 \usage{
-update_grammar_probabilities(grammar, individual, learning_factor = 0.01)
+update_grammar_probabilities(
+  grammar,
+  individual,
+  learning_factor = 0.01,
+  force_perturbation = FALSE,
+  perturbation_factor = 0.1
+)
 }
 \arguments{
 \item{grammar}{PCFG grammar structure}
@@ -12,6 +18,10 @@ update_grammar_probabilities(grammar, individual, learning_factor = 0.01)
 \item{individual}{Individual with genotype and positions}
 
 \item{learning_factor}{Learning rate for probability adjustment (default: 0.01)}
+
+\item{force_perturbation}{Whether to force perturbation of all probability distributions (default: FALSE)}
+
+\item{perturbation_factor}{Amount of perturbation when forcing changes (default: 0.1)}
 }
 \value{
 Updated grammar with adjusted probabilities

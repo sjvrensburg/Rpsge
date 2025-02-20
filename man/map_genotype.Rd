@@ -4,7 +4,7 @@
 \alias{map_genotype}
 \title{Map a genotype to a phenotype using PSGE principles}
 \usage{
-map_genotype(grammar, genotype, max_depth = 17)
+map_genotype(grammar, genotype, max_depth = 17, seed = NULL)
 }
 \arguments{
 \item{grammar}{Grammar structure from read_pcfg_grammar()}
@@ -12,6 +12,8 @@ map_genotype(grammar, genotype, max_depth = 17)
 \item{genotype}{Genotype representation (list of real values per non-terminal)}
 
 \item{max_depth}{Maximum tree depth allowed}
+
+\item{seed}{Optional random seed for reproducible mapping (default: NULL)}
 }
 \value{
 List containing phenotype string and mapping information

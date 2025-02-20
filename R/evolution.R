@@ -3,9 +3,12 @@
 #' @param grammar PCFG grammar structure
 #' @param individual Individual with genotype and positions
 #' @param learning_factor Learning rate for probability adjustment (default: 0.01)
+#' @param force_perturbation Whether to force perturbation of all probability distributions (default: FALSE)
+#' @param perturbation_factor Amount of perturbation when forcing changes (default: 0.1)
 #' @return Updated grammar with adjusted probabilities
 #' @export
-update_grammar_probabilities <- function(grammar, individual, learning_factor = 0.01) {
+update_grammar_probabilities <- function(grammar, individual, learning_factor = 0.01,
+                                         force_perturbation = FALSE, perturbation_factor = 0.1) {
   if (is.null(individual$genotype)) {
     stop("Invalid individual: missing genotype")
   }
@@ -37,42 +40,42 @@ update_grammar_probabilities <- function(grammar, individual, learning_factor = 
     }
   }
 
-  # Process every non-terminal with a fixed perturbation
-  # This ensures ALL non-terminals are changed regardless of usage
-  for (nt in names(grammar_copy$rules)) {
-    if (length(grammar_copy$rules[[nt]]) > 1) {
-      # Explicitly force a change in all probability distributions
-      highest_prob <- 0
-      highest_idx <- 1
+  # Process every non-terminal with a fixed perturbation if requested
+  if (force_perturbation) {
+    for (nt in names(grammar_copy$rules)) {
+      if (length(grammar_copy$rules[[nt]]) > 1) {
+        # Find the highest probability rule
+        highest_prob <- 0
+        highest_idx <- 1
 
-      # Find the highest probability rule
-      for (i in seq_along(grammar_copy$rules[[nt]])) {
-        if (grammar_copy$rules[[nt]][[i]]$prob > highest_prob) {
-          highest_prob <- grammar_copy$rules[[nt]][[i]]$prob
-          highest_idx <- i
+        for (i in seq_along(grammar_copy$rules[[nt]])) {
+          if (grammar_copy$rules[[nt]][[i]]$prob > highest_prob) {
+            highest_prob <- grammar_copy$rules[[nt]][[i]]$prob
+            highest_idx <- i
+          }
         }
-      }
 
-      # Ensure a meaningful change
-      perturb_amount <- min(0.1, highest_prob * 0.5)  # Take up to half of highest prob
+        # Ensure a meaningful change
+        perturb_amount <- min(perturbation_factor, highest_prob * 0.5)
 
-      # Reduce the highest probability
-      grammar_copy$rules[[nt]][[highest_idx]]$prob <- grammar_copy$rules[[nt]][[highest_idx]]$prob - perturb_amount
+        # Reduce the highest probability
+        grammar_copy$rules[[nt]][[highest_idx]]$prob <- grammar_copy$rules[[nt]][[highest_idx]]$prob - perturb_amount
 
-      # Find a random rule to increase (not the highest)
-      other_indices <- setdiff(seq_along(grammar_copy$rules[[nt]]), highest_idx)
-      if (length(other_indices) > 0) {
-        lucky_idx <- sample(other_indices, 1)
-        grammar_copy$rules[[nt]][[lucky_idx]]$prob <- grammar_copy$rules[[nt]][[lucky_idx]]$prob + perturb_amount
-      } else {
-        # If there's only one rule, restore its probability
-        grammar_copy$rules[[nt]][[highest_idx]]$prob <- 1.0
-      }
+        # Find a random rule to increase (not the highest)
+        other_indices <- setdiff(seq_along(grammar_copy$rules[[nt]]), highest_idx)
+        if (length(other_indices) > 0) {
+          lucky_idx <- sample(other_indices, 1)
+          grammar_copy$rules[[nt]][[lucky_idx]]$prob <- grammar_copy$rules[[nt]][[lucky_idx]]$prob + perturb_amount
+        } else {
+          # If there's only one rule, restore its probability
+          grammar_copy$rules[[nt]][[highest_idx]]$prob <- 1.0
+        }
 
-      # Normalize again
-      total_prob <- sum(sapply(grammar_copy$rules[[nt]], function(r) r$prob))
-      for (i in seq_along(grammar_copy$rules[[nt]])) {
-        grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob / total_prob
+        # Normalize again
+        total_prob <- sum(sapply(grammar_copy$rules[[nt]], function(r) r$prob))
+        for (i in seq_along(grammar_copy$rules[[nt]])) {
+          grammar_copy$rules[[nt]][[i]]$prob <- grammar_copy$rules[[nt]][[i]]$prob / total_prob
+        }
       }
     }
   }
@@ -261,7 +264,7 @@ mutate <- function(individual, mutation_rate = 0.1) {
     for (i in seq_along(new_genotype[[nt]])) {
       if (runif(1) < mutation_rate) {
         # Apply Gaussian mutation
-        mutation <- rnorm(1, mean = 0, sd = 0.1)
+        mutation <- rnorm(1, mean = 0, sd = 0.5)
         new_value <- new_genotype[[nt]][i] + mutation
 
         # Keep value in [0,1] range
@@ -359,13 +362,16 @@ create_next_generation <- function(population, grammar, crossover_rate = 0.9,
 #' @param elitism Number of elite individuals to preserve
 #' @param learning_factor Learning rate for grammar probability updates
 #' @param alternate_update Whether to alternate between best overall and best in generation
+#' @param force_perturbation Whether to force perturbation of all probability distributions (default: FALSE)
+#' @param perturbation_factor Amount of perturbation when forcing changes (default: 0.1)
 #' @param verbose Whether to print progress
 #' @return List containing best solution and final grammar
 #' @export
 run_psge <- function(grammar, fitness_fn, pop_size = 100, generations = 50,
                      crossover_rate = 0.9, mutation_rate = 0.1, max_depth = 17,
                      tournament_size = 3, elitism = NULL, learning_factor = 0.01,
-                     alternate_update = TRUE, verbose = TRUE) {
+                     alternate_update = TRUE, force_perturbation = FALSE,
+                     perturbation_factor = 0.1, verbose = TRUE) {
 
   # Set default elitism if not specified
   if (is.null(elitism)) {
@@ -407,7 +413,10 @@ run_psge <- function(grammar, fitness_fn, pop_size = 100, generations = 50,
 
     # Update grammar probabilities
     best_to_update <- if (alternate_update && gen %% 2 == 0) best_overall else current_best
-    working_grammar <- update_grammar_probabilities(working_grammar, best_to_update, learning_factor)
+    working_grammar <- update_grammar_probabilities(
+      working_grammar, best_to_update, learning_factor,
+      force_perturbation, perturbation_factor
+    )
 
     # Create new generation
     population <- create_next_generation(

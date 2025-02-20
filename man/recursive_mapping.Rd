@@ -11,7 +11,8 @@ recursive_mapping(
   symbol,
   current_depth,
   max_depth,
-  output = character(0)
+  output = character(0),
+  use_position_seeds = FALSE
 )
 }
 \arguments{
@@ -28,6 +29,8 @@ recursive_mapping(
 \item{max_depth}{Maximum allowed tree depth}
 
 \item{output}{Current output being built}
+
+\item{use_position_seeds}{Whether to use position-based seeds for consistency}
 }
 \value{
 Updated output, depth reached, and positions
