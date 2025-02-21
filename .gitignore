@@ -44,3 +44,4 @@ rsconnect/
 *.txt
 math.bnf
 regression.bnf
+inst/doc
