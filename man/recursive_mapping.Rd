@@ -12,7 +12,8 @@ recursive_mapping(
   current_depth,
   max_depth,
   output = character(0),
-  use_position_seeds = FALSE
+  use_position_seeds = FALSE,
+  debug_output = FALSE
 )
 }
 \arguments{
@@ -33,7 +34,7 @@ recursive_mapping(
 \item{use_position_seeds}{Whether to use position-based seeds for consistency}
 }
 \value{
-Updated output, depth reached, and positions
+Updated output, depth reached, positions, and genotype
 }
 \description{
 Recursively map a genotype to a phenotype

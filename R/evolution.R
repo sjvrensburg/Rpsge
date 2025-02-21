@@ -151,24 +151,88 @@ initialize_population <- function(grammar, pop_size, max_depth = 17) {
 #' @param grammar PCFG grammar structure
 #' @param eval_func Fitness evaluation function
 #' @param max_depth Maximum tree depth
+#' @param parallel Boolean indicating whether to use parallel evaluation
+#' @param n_workers Number of workers for parallel processing (default: 2)
+#' @param future_strategy Future strategy to use (default: "multisession")
+#'
+#' @details
+#' Note that we use progressr progress bars with this function:
+#'
+#' ```r
+#' library(progressr)
+#' handlers(global = TRUE)
+#' handlers("progress")
+#'
+#' with_progress({
+#'   population <- evaluate_population(
+#'     population = initial_pop,
+#'     grammar = my_grammar,
+#'     eval_func = my_fitness_function,
+#'     parallel = TRUE
+#'   )
+#' })
+#' ```
+#'
 #' @return Evaluated population with fitness values
 #' @export
-evaluate_population <- function(population, grammar, eval_func, max_depth = 17) {
-  # Create a copy of the population to avoid modifying the original
-  evaluated_population <- lapply(population, function(ind) {
-    ind_copy <- ind
+evaluate_population <- function(population, grammar, eval_func, max_depth = 17,
+                                parallel = FALSE, n_workers = 2,
+                                future_strategy = "multisession") {
 
-    # Map genotype to phenotype
-    mapping_result <- map_genotype(grammar, ind_copy$genotype, max_depth)
-    ind_copy$phenotype <- mapping_result$phenotype
-    ind_copy$mapping_positions <- mapping_result$positions
-    ind_copy$tree_depth <- mapping_result$depth
+  # Create progress handler for this function
+  p <- progressr::progressor(steps = length(population))
 
-    # Evaluate fitness
-    ind_copy$fitness <- eval_func(ind_copy$phenotype)
+  if (parallel) {
+    # Setup parallel backend
+    future::plan(future_strategy, workers = n_workers)
+    doFuture::registerDoFuture()
 
-    return(ind_copy)
-  })
+    # Use foreach for parallel evaluation
+    evaluated_population <- foreach::foreach(
+      ind = population,
+      .packages = c("Rpsge"), # Add any other required packages
+      .export = c("map_genotype", "eval_func") # Add other functions that need to be exported
+      ) %dorng% {
+      ind_copy <- ind
+
+      # Map genotype to phenotype
+      mapping_result <- map_genotype(grammar, ind_copy$genotype, max_depth)
+      ind_copy$phenotype <- mapping_result$phenotype
+      ind_copy$mapping_positions <- mapping_result$positions
+      ind_copy$tree_depth <- mapping_result$depth
+
+      # Evaluate fitness
+      ind_copy$fitness <- eval_func(ind_copy$phenotype)
+
+      # Update progress (works in parallel with progressr)
+      p(sprintf("Evaluated individual: fitness = %.6f", ind_copy$fitness))
+
+      return(ind_copy)
+    }
+
+    # Convert to list if not already
+    evaluated_population <- as.list(evaluated_population)
+
+  } else {
+    # Sequential evaluation
+    evaluated_population <- lapply(population, function(ind) {
+      ind_copy <- ind
+
+      # Map genotype to phenotype
+      mapping_result <- map_genotype(grammar, ind_copy$genotype, max_depth)
+      ind_copy$phenotype <- mapping_result$phenotype
+      ind_copy$mapping_positions <- mapping_result$positions
+      ind_copy$tree_depth <- mapping_result$depth
+
+      # Evaluate fitness
+      ind_copy$fitness <- eval_func(ind_copy$phenotype)
+
+      # Update progress
+      p(sprintf("Evaluated individual: fitness = %.6f", ind_copy$fitness))
+
+      return(ind_copy)
+    })
+  }
 
   return(evaluated_population)
 }
@@ -347,123 +411,4 @@ create_next_generation <- function(population, grammar, crossover_rate = 0.9,
   }
 
   return(new_population)
-}
-
-#' Run the PSGE algorithm
-#'
-#' @param grammar PCFG grammar structure from read_pcfg_grammar()
-#' @param fitness_fn Fitness evaluation function
-#' @param pop_size Population size
-#' @param generations Number of generations
-#' @param crossover_rate Probability of crossover
-#' @param mutation_rate Mutation rate
-#' @param max_depth Maximum tree depth
-#' @param tournament_size Tournament selection size
-#' @param elitism Number of elite individuals to preserve
-#' @param learning_factor Learning rate for grammar probability updates
-#' @param alternate_update Whether to alternate between best overall and best in generation
-#' @param force_perturbation Whether to force perturbation of all probability distributions (default: FALSE)
-#' @param perturbation_factor Amount of perturbation when forcing changes (default: 0.1)
-#' @param verbose Whether to print progress
-#' @return List containing best solution and final grammar
-#' @export
-run_psge <- function(grammar, fitness_fn, pop_size = 100, generations = 50,
-                     crossover_rate = 0.9, mutation_rate = 0.1, max_depth = 17,
-                     tournament_size = 3, elitism = NULL, learning_factor = 0.01,
-                     alternate_update = TRUE, force_perturbation = FALSE,
-                     perturbation_factor = 0.1, verbose = TRUE) {
-
-  # Set default elitism if not specified
-  if (is.null(elitism)) {
-    elitism <- max(round(pop_size * 0.1), 1)
-  }
-
-  # Create a deep copy of the grammar to avoid modifying the original
-  working_grammar <- grammar
-
-  # Initialize population
-  if (verbose) cat("Initializing population...\n")
-  population <- initialize_population(working_grammar, pop_size, max_depth)
-
-  # Evaluate initial population
-  if (verbose) cat("Evaluating initial population...\n")
-  population <- evaluate_population(population, working_grammar, fitness_fn, max_depth)
-
-  # Sort population
-  population <- population[order(sapply(population, function(ind) ind$fitness))]
-
-  # Initialize tracking variables
-  best_overall <- population[[1]]
-  history <- data.frame(
-    generation = 0,
-    best_fitness = best_overall$fitness,
-    mean_fitness = mean(sapply(population, function(ind) ind$fitness))
-  )
-
-  # Main evolutionary loop
-  for (gen in 1:generations) {
-    if (verbose) cat(sprintf("Generation %d/%d: Best fitness = %.6f\n",
-                             gen, generations, population[[1]]$fitness))
-
-    # Update best individuals
-    current_best <- population[[1]]
-    if (current_best$fitness < best_overall$fitness) {
-      best_overall <- current_best
-    }
-
-    # Update grammar probabilities
-    best_to_update <- if (alternate_update && gen %% 2 == 0) best_overall else current_best
-    working_grammar <- update_grammar_probabilities(
-      working_grammar, best_to_update, learning_factor,
-      force_perturbation, perturbation_factor
-    )
-
-    # Create new generation
-    population <- create_next_generation(
-      population, working_grammar, crossover_rate, mutation_rate,
-      tournament_size, elitism
-    )
-
-    # Evaluate new population
-    population <- evaluate_population(population, working_grammar, fitness_fn, max_depth)
-
-    # Sort population
-    population <- population[order(sapply(population, function(ind) ind$fitness))]
-
-    # Track history
-    history <- rbind(history, data.frame(
-      generation = gen,
-      best_fitness = population[[1]]$fitness,
-      mean_fitness = mean(sapply(population, function(ind) ind$fitness))
-    ))
-  }
-
-  if (verbose) {
-    cat("\nEvolution completed\n")
-    cat(sprintf("Best fitness: %f\n", best_overall$fitness))
-    cat("Best phenotype:", best_overall$phenotype, "\n")
-  }
-
-  return(list(
-    best_solution = best_overall,
-    final_grammar = working_grammar,
-    history = history
-  ))
-}
-
-#' Complete PSGE pipeline
-#'
-#' @param grammar_file Path to BNF grammar file
-#' @param fitness_fn Fitness evaluation function
-#' @param ... Additional parameters passed to run_psge
-#' @return Best solution and final grammar
-#' @export
-psge <- function(grammar_file, fitness_fn, ...) {
-  # Load and parse grammar
-  grammar <- read_pcfg_grammar(grammar_file)
-
-  # Run PSGE algorithm
-  result <- run_psge(grammar, fitness_fn, ...)
-
-  return(result)
 }

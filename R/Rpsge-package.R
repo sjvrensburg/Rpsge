@@ -18,4 +18,5 @@
 #' @useDynLib Rpsge, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
 #' @importFrom methods new
+#' @importFrom doRNG %dorng%
 "_PACKAGE"
