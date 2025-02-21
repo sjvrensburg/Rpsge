@@ -73,7 +73,8 @@ safe_rule_selection <- function(rules, codon) {
 #' @param max_depth Maximum allowed tree depth
 #' @return Updated genotype and reached depth
 #' @keywords internal
-recursive_individual_creation <- function(grammar, genotype, symbol, current_depth, max_depth) {
+recursive_individual_creation <- function(
+    grammar, genotype, symbol, current_depth, max_depth) {
   # Guard against exceeding max depth
   if (current_depth > max_depth) {
     return(list(genotype = genotype, depth = current_depth))
@@ -219,170 +220,31 @@ map_genotype <- function(grammar, genotype, max_depth = 17, seed = NULL) {
 #' @param max_depth Maximum allowed tree depth
 #' @param output Current output being built
 #' @param use_position_seeds Whether to use position-based seeds for consistency
-#' @return Updated output, depth reached, and positions
+#' @return Updated output, depth reached, positions, and genotype
 #' @keywords internal
 recursive_mapping <- function(grammar, genotype, positions, symbol,
                               current_depth, max_depth, output = character(0),
-                              use_position_seeds = FALSE) {
-  # Guard against exceeding max depth
-  if (current_depth > max_depth) {
-    return(list(
-      output = c(output, "max_depth_exceeded"),
-      depth = current_depth,
-      positions = positions
-    ))
+                              use_position_seeds = FALSE,
+                              debug_output = FALSE) {
+  # Add debug output before calling C++
+  if (debug_output) {
+    cat("\nR wrapper - Initial state:\n")
+    cat("Positions:\n")
+    str(positions)
+    cat("Genotype:\n")
+    str(genotype)
   }
 
-  # For terminals, just add to output
-  if (!(symbol %in% grammar$non_terminals)) {
-    output <- c(output, symbol)
-    return(list(output = output, depth = current_depth, positions = positions))
-  }
+  # Call the C++ implementation
+  result <- recursiveMappingCpp(grammar, genotype, positions, symbol,
+                                current_depth, max_depth, output,
+                                use_position_seeds, debug_output)
 
-  # Get or generate codon
-  needs_new_codon <- positions[[symbol]] > length(genotype[[symbol]])
-
-  if (needs_new_codon) {
-    # Calculate a deterministic seed value based on:
-    # 1. Current positions in all non-terminals
-    # 2. The non-terminal being processed
-    # 3. The current state of the output
-    # This ensures same inputs -> same outputs
-    if (use_position_seeds) {
-      pos_hash <- paste0(
-        paste(names(positions), unlist(positions), sep = ":", collapse = ";"),
-        ";NT:", symbol,
-        ";depth:", current_depth
-      )
-      seed_value <- sum(utf8ToInt(pos_hash))
-
-      old_seed <- NULL
-      if (exists(".Random.seed")) {
-        old_seed <- .Random.seed
-      }
-      set.seed(seed_value)
-      new_value <- runif(1)
-      if (!is.null(old_seed)) {
-        .Random.seed <- old_seed
-      } else {
-        set.seed(NULL)
-      }
-    } else {
-      new_value <- runif(1)
-    }
-    genotype[[symbol]] <- c(genotype[[symbol]], new_value)
-  }
-
-  codon <- genotype[[symbol]][positions[[symbol]]]
-  positions[[symbol]] <- positions[[symbol]] + 1
-
-  # Ensure codon is valid (handle NA/NULL)
-  if (is.null(codon) || is.na(codon) || !is.numeric(codon)) {
-    if (use_position_seeds) {
-      # Use deterministic value
-      seed_value <- sum(positions[[symbol]]) * 1000 + which(names(positions) == symbol) * 100
-      old_seed <- NULL
-      if (exists(".Random.seed")) old_seed <- .Random.seed
-      set.seed(seed_value)
-      codon <- runif(1)
-      if (!is.null(old_seed)) {
-        .Random.seed <- old_seed
-      } else {
-        set.seed(NULL)
-      }
-    } else {
-      codon <- runif(1)
-    }
-    genotype[[symbol]][positions[[symbol]]-1] <- codon
-  }
-
-  # Bound codon to [0,1]
-  codon <- max(0, min(1, codon))
-
-  # Handle maximum depth constraint
-  if (current_depth >= max_depth) {
-    # Get non-recursive rules
-    grammar_with_flags <- identify_recursive_rules(grammar)
-    non_recursive_rules <- get_non_recursive_rules(grammar_with_flags, symbol)
-
-    if (length(non_recursive_rules) == 0) {
-      non_recursive_rules <- grammar$rules[[symbol]]
-    }
-
-    # Select rule based on codon
-    cum_prob <- 0
-    selected_index <- length(non_recursive_rules)  # Default to last rule
-
-    # Get normalized probabilities
-    probs <- sapply(non_recursive_rules, function(r) r$prob)
-    if (sum(probs) == 0) {
-      # Equal probability if all are zero
-      probs <- rep(1/length(probs), length(probs))
-    } else {
-      probs <- probs / sum(probs)
-    }
-
-    for (i in seq_along(probs)) {
-      cum_prob <- cum_prob + probs[i]
-      if (codon <= cum_prob) {
-        selected_index <- i
-        break
-      }
-    }
-
-    # Map to original rule
-    original_indices <- integer(0)
-    for (i in seq_along(grammar$rules[[symbol]])) {
-      if (identical(grammar$rules[[symbol]][[i]], non_recursive_rules[[selected_index]])) {
-        original_indices <- c(original_indices, i)
-        break  # Stop at first match for consistency
-      }
-    }
-
-    if (length(original_indices) == 0) {
-      selected_rule <- grammar$rules[[symbol]][[1]]
-    } else {
-      selected_rule <- grammar$rules[[symbol]][[original_indices[1]]]
-    }
-  } else {
-    # Normal rule selection
-    rules <- grammar$rules[[symbol]]
-
-    cum_prob <- 0
-    selected_index <- length(rules)  # Default to last rule
-
-    for (i in seq_along(rules)) {
-      cum_prob <- cum_prob + rules[[i]]$prob
-      if (codon <= cum_prob) {
-        selected_index <- i
-        break
-      }
-    }
-
-    selected_rule <- rules[[selected_index]]
-  }
-
-  # Process selected rule's symbols
-  max_depth_reached <- current_depth
-  for (i in seq_along(selected_rule$symbols)) {
-    if (selected_rule$types[i] == "NT") {
-      if (current_depth + 1 <= max_depth) {
-        result <- recursive_mapping(
-          grammar, genotype, positions,
-          selected_rule$symbols[i], current_depth + 1, max_depth,
-          output, use_position_seeds
-        )
-        output <- result$output
-        positions <- result$positions
-        max_depth_reached <- max(max_depth_reached, result$depth)
-      } else {
-        output <- c(output, "at_max_depth")
-        max_depth_reached <- max_depth
-      }
-    } else {
-      output <- c(output, selected_rule$symbols[i])
-    }
-  }
-
-  return(list(output = output, depth = max_depth_reached, positions = positions))
+  # Return all updated values including genotype
+  return(list(
+    output = result$output,
+    depth = result$depth,
+    positions = result$positions,
+    genotype = result$genotype
+  ))
 }

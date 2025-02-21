@@ -194,6 +194,8 @@ test_that("recursive_mapping handles terminals and non-terminals", {
   expect_equal(terminal_result$depth, 0)
 
   # Test non-terminal case with explicit mapping
+  # Create fresh positions
+  positions <- list(expr = 1, op = 1, var = 1)
   non_terminal_result <- recursive_mapping(
     grammar,
     list(expr = c(0.6), op = c(0.1), var = c(0.1)),  # expr->var, var->x
@@ -206,15 +208,28 @@ test_that("recursive_mapping handles terminals and non-terminals", {
   expect_equal(non_terminal_result$output, "x")
   expect_true(non_terminal_result$depth > 0)
 
-  # Test recursive rule
+  # Test recursive rule with debugging
+  # Create fresh positions
+  positions <- list(expr = 1, op = 1, var = 1)
   recursive_result <- recursive_mapping(
     grammar,
-    list(expr = c(0.1, 0.6), op = c(0.1), var = c(0.1)),  # expr->(expr op expr), then expr->var
+    list(expr = c(0.1, 0.6), op = c(0.1), var = c(0.1)),
     positions,
     "expr",
     0,
-    5
+    5,
+    output = character(0),
+    use_position_seeds = FALSE,
+    debug_output = TRUE
   )
+
+  # Print debugging info
+  cat("Recursive result output:", paste(recursive_result$output, collapse=", "), "\n")
+  cat("Recursive result depth:", recursive_result$depth, "\n")
+
+  # Check the original genotype after mapping
+  cat("Genotype after mapping:\n")
+  str(recursive_result$genotype)
 
   # Should produce something like "x + x"
   expect_true(length(recursive_result$output) > 1)
