@@ -1,7 +1,3 @@
-# We want to express grammars as simple lists of lists.
-# I.e., avoid the convoluted class-based implementation
-# from previous versions.
-
 #' Parse and validate a BNF grammar file for PSGE
 #'
 #' @param grammar_file Path to the BNF grammar file
@@ -9,6 +5,16 @@
 #' @param prob_map Optional list of probability maps for each non-terminal
 #' @param validate Boolean indicating whether to validate the grammar with `validate_grammar`
 #' @return A validated PCFG grammar structure
+#' @details
+#' The function supports grammar files with rules that span multiple lines.
+#' Production alternatives can continue on subsequent lines, either with or without
+#' pipe symbols (`|`) at the beginning of continuation lines.
+#'
+#' Example of supported multi-line format:
+#' ```
+#' <rule> ::= option1 | option2 |
+#'           option3 | option4
+#' ```
 #' @export
 read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", prob_map = NULL, validate = TRUE) {
   if (!file.exists(grammar_file)) {
@@ -17,6 +23,9 @@ read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", pro
 
   # Read file content
   lines <- readLines(grammar_file)
+
+  # Preprocess to handle multi-line rules
+  processed_lines <- preprocess_grammar_file(lines)
 
   # Initialize grammar structure
   grammar <- list(
@@ -31,8 +40,8 @@ read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", pro
   rule_sep <- "::="
   prod_sep <- "\\|"
 
-  # Process each line
-  for (line in lines) {
+  # Process each preprocessed line
+  for (line in processed_lines) {
     line <- trimws(line)
     if (line == "" || startsWith(line, "#")) {
       next # Skip empty lines and comments
@@ -41,7 +50,8 @@ read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", pro
     # Split into LHS and RHS
     parts <- strsplit(line, rule_sep, fixed = FALSE)[[1]]
     if (length(parts) != 2) {
-      next # Skip invalid lines
+      warning("Invalid rule format (missing ::=): ", line)
+      next
     }
 
     # Extract non-terminal (left-hand side)
@@ -72,6 +82,11 @@ read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", pro
 
     # Process each production
     for (prod in productions) {
+      # Skip empty productions
+      if (nchar(prod) == 0) {
+        next
+      }
+
       # Parse tokens
       tokens <- extract_tokens(prod)
 
@@ -101,6 +116,107 @@ read_pcfg_grammar <- function(grammar_file, initial_prob_method = "uniform", pro
   }
 
   return(grammar)
+}
+
+#' Preprocess grammar file to handle multi-line rules
+#'
+#' @param lines Character vector of lines from the grammar file
+#' @return Character vector of processed lines with multi-line rules combined
+#' @keywords internal
+preprocess_grammar_file <- function(lines) {
+  # Initialize variables
+  processed_lines <- character(0)
+  current_rule <- NULL
+  current_lhs <- NULL
+  in_continuation <- FALSE
+
+  # Pre-allocate result vector for better performance with large grammars
+  max_possible_rules <- sum(!startsWith(trimws(lines), "#") & trimws(lines) != "")
+  processed_lines <- character(max_possible_rules)
+  rule_count <- 0
+
+  for (i in seq_along(lines)) {
+    line <- trimws(lines[i])
+
+    # Skip empty lines and comments
+    if (line == "" || startsWith(line, "#")) {
+      next
+    }
+
+    # Check if this line defines a new rule with ::=
+    if (grepl("::=", line)) {
+      # Save previous rule if it exists
+      if (!is.null(current_rule)) {
+        rule_count <- rule_count + 1
+        processed_lines[rule_count] <- current_rule
+      }
+
+      # Start new rule
+      current_rule <- line
+      parts <- strsplit(line, "::=", fixed = TRUE)[[1]]
+      if (length(parts) >= 1) {
+        current_lhs <- trimws(parts[1])
+        in_continuation <- endsWith(trimws(line), "|")
+      }
+
+    } else if (in_continuation || startsWith(trimws(line), "|")) {
+      # This is a continuation line - handle pipe symbol at beginning
+      if (startsWith(trimws(line), "|")) {
+        line <- trimws(line)
+      }
+
+      # Ensure there's a space between the existing rule and continuation
+      if (!endsWith(current_rule, " ") && !startsWith(line, " ")) {
+        current_rule <- paste0(current_rule, " ", line)
+      } else {
+        current_rule <- paste0(current_rule, line)
+      }
+
+      # Check if continuation continues
+      in_continuation <- endsWith(trimws(line), "|")
+
+    } else if (!is.null(current_lhs) && nchar(current_lhs) > 0) {
+      # Implicit continuation - line without ::= that belongs to current rule
+
+      # Don't treat a new non-terminal definition as continuation of previous rule
+      if (grepl("^<[^>]+>$", trimws(line))) {
+        # This looks like a new non-terminal definition
+        # Save current rule and start a new implied rule
+        rule_count <- rule_count + 1
+        processed_lines[rule_count] <- current_rule
+        current_rule <- paste0(current_lhs, " ::= ", line)
+        in_continuation <- endsWith(trimws(line), "|")
+      } else {
+        # This is a continuation without a pipe - add an implicit pipe
+        if (!endsWith(current_rule, "|")) {
+          current_rule <- paste0(current_rule, " | ", line)
+        } else {
+          # Current rule already ends with pipe, just append
+          current_rule <- paste0(current_rule, " ", line)
+        }
+        in_continuation <- endsWith(trimws(line), "|")
+      }
+    } else {
+      # Standalone line with no context
+      # This shouldn't normally happen with well-formed grammars
+      # but we handle it gracefully
+      rule_count <- rule_count + 1
+      processed_lines[rule_count] <- line
+    }
+  }
+
+  # Add the last rule if not empty
+  if (!is.null(current_rule)) {
+    rule_count <- rule_count + 1
+    processed_lines[rule_count] <- current_rule
+  }
+
+  # Trim the result to actual size
+  if (rule_count < max_possible_rules) {
+    processed_lines <- processed_lines[1:rule_count]
+  }
+
+  return(processed_lines)
 }
 
 #' Extract tokens (terminals and non-terminals) from a production string

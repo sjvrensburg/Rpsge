@@ -1,6 +1,6 @@
 Package: Rpsge
 Title: Probabilistic Structured Grammatical Evolution in R
-Version: 0.0.1.0000
+Version: 0.0.1.1000
 Authors@R: 
     person("Stéfan", "Janse van Rensburg", , "stefanj@mandala.ac.za", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-0749-2277"))
@@ -21,6 +21,7 @@ Imports:
     roxygen2,
     doRNG,
     doFuture,
+    future.apply,
     progressr
 Suggests: 
     knitr,
