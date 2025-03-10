@@ -26,3 +26,14 @@ A validated PCFG grammar structure
 \description{
 Parse and validate a BNF grammar file for PSGE
 }
+\details{
+The function supports grammar files with rules that span multiple lines.
+Production alternatives can continue on subsequent lines, either with or without
+pipe symbols (\code{|}) at the beginning of continuation lines.
+
+Example of supported multi-line format:
+
+\if{html}{\out{<div class="sourceCode">}}\preformatted{<rule> ::= option1 | option2 |
+          option3 | option4
+}\if{html}{\out{</div>}}
+}
